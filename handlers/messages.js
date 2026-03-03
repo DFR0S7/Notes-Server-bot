@@ -11,59 +11,76 @@ export async function handleMessage(message) {
 
   const text = message.content.trim();
 
-  // ── cancel ────────────────────────────────────────────────────────────────
+  // cancel
   if (text.toLowerCase() === 'cancel') {
     activeEdits.delete(message.author.id);
-    return message.reply('❌ Edit session cancelled.');
+    return message.reply('Edit session cancelled.');
   }
 
-  // ── done ──────────────────────────────────────────────────────────────────
+  // done
   if (text.toLowerCase() === 'done') {
     activeEdits.delete(message.author.id);
 
     if (session.type === 'recruit') {
       const { data: recruit } = await supabase.from('recruits').select('*').eq('id', session.id).single();
       return message.reply({
-        content: '✅ Edits saved! Confirm to calculate fit score:',
+        content: 'Edits saved! Confirm to calculate fit score:',
         embeds: [createAnalysisEmbed(recruit)],
         components: [getConfirmRow(session.id)],
       });
     }
 
     if (session.type === 'config') {
-      return message.reply(`✅ Ranges saved for **${session.position} ${session.archetype}**!`);
+      return message.reply('Ranges saved for ' + session.position + ' ' + session.archetype + '!');
     }
   }
 
-  // ── recruit attribute edit: "Speed: 92" ───────────────────────────────────
+  // recruit attribute edit: one per message "Speed: 92"
   if (session.type === 'recruit') {
     const match = text.match(/^([A-Za-z\s]+):\s*(\d+)$/);
-    if (!match) return message.react('❓');
+    if (!match) return message.react('?');
 
     const attr  = match[1].trim();
     const value = parseInt(match[2]);
-    if (value < 1 || value > 99) return message.reply('❌ Value must be between 1 and 99.');
+    if (value < 1 || value > 99) return message.reply('Value must be between 1 and 99.');
 
     const { data } = await supabase.from('recruits').select('attributes').eq('id', session.id).single();
     const updated  = { ...data.attributes, [attr]: value };
     await supabase.from('recruits').update({ attributes: updated }).eq('id', session.id);
 
-    return message.reply(`Updated **${attr}** → ${value}`);
+    return message.reply('Updated ' + attr + ' to ' + value);
   }
 
-  // ── config range edit: "Speed 85 95" ─────────────────────────────────────
+  // config range edit: all at once, one per line "Speed 85 95"
   if (session.type === 'config') {
-    const parts = text.split(/\s+/);
-    if (parts.length < 3) return message.react('❓');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const updates = {};
+    const errors  = [];
 
-    const min  = parseInt(parts[parts.length - 2]);
-    const max  = parseInt(parts[parts.length - 1]);
-    const attr = parts.slice(0, parts.length - 2).join(' ');
+    for (const line of lines) {
+      const parts = line.split(/\s+/);
+      if (parts.length < 3) {
+        errors.push('Could not parse: ' + line);
+        continue;
+      }
 
-    if (isNaN(min) || isNaN(max) || min >= max) {
-      return message.reply('❌ Format: AttributeName min max (e.g. Speed 85 95). Min must be less than max.');
+      const min  = parseInt(parts[parts.length - 2]);
+      const max  = parseInt(parts[parts.length - 1]);
+      const attr = parts.slice(0, parts.length - 2).join(' ');
+
+      if (isNaN(min) || isNaN(max) || min >= max) {
+        errors.push('Invalid range for: ' + line + ' (min must be less than max)');
+        continue;
+      }
+
+      updates[attr] = { min, max };
     }
 
+    if (Object.keys(updates).length === 0) {
+      return message.reply('No valid ranges found. Format: AttributeName min max (e.g. Speed 85 95)');
+    }
+
+    // Merge with existing ranges
     const { data: arch } = await supabase
       .from('archetypes')
       .select('ranges')
@@ -71,12 +88,20 @@ export async function handleMessage(message) {
       .eq('archetype', session.archetype)
       .single();
 
-    const ranges = { ...arch.ranges, [attr]: { min, max } };
+    const ranges = { ...arch.ranges, ...updates };
     await supabase.from('archetypes')
       .update({ ranges })
       .eq('position', session.position)
       .eq('archetype', session.archetype);
 
-    return message.reply(`✅ **${attr}** range set to ${min}–${max}`);
+    const saved = Object.entries(updates)
+      .map(([attr, { min, max }]) => attr + ': ' + min + '-' + max)
+      .join('\n');
+
+    let reply = 'Saved ' + Object.keys(updates).length + ' ranges:\n' + saved;
+    if (errors.length) reply += '\n\nSkipped:\n' + errors.join('\n');
+    reply += '\n\nType more ranges or "done" to finish.';
+
+    return message.reply(reply);
   }
 }
