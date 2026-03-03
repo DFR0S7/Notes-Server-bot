@@ -35,6 +35,24 @@ if (RENDER_URL) {
   }, 3 * 60 * 1000);
 }
 
+// ── Crash protection ─────────────────────────────────────────────────────────
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err.message);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err?.message ?? err);
+});
+
+client.on('error', (err) => {
+  console.error('Discord client error:', err.message);
+});
+
+client.on('shardError', (err) => {
+  console.error('Shard error (will auto-reconnect):', err.message);
+});
+
+// ── Event handlers ───────────────────────────────────────────────────────────
 client.once('ready', () => console.log(`✅ Notes Server Bot online: ${client.user.tag}`));
 
 client.on('interactionCreate', async (interaction) => {
