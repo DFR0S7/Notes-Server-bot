@@ -3,6 +3,7 @@ import axios from 'axios';
 import { writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import sharp from 'sharp';
 
 // Known CFB26 attribute names as they appear in OCR (uppercase)
 const NAME_MAP = {
@@ -61,40 +62,45 @@ const NAME_MAP = {
   'KICK RETURN':          'Kick Return',
 };
 
-// All known attribute name tokens for matching partial lines
 const ALL_NAMES = Object.keys(NAME_MAP);
 
 export async function performOCR(imageUrl) {
-  const tmpPath = join(tmpdir(), 'recruit_' + Date.now() + '.png');
+  const tmpRaw    = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
+  const tmpCrop   = join(tmpdir(), 'recruit_crop_' + Date.now() + '.png');
+
+  // Download original image
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
-  writeFileSync(tmpPath, Buffer.from(response.data));
+  writeFileSync(tmpRaw, Buffer.from(response.data));
+
+  // Auto-crop: keep only the right 60% of the image to remove Scout panel
+  const metadata = await sharp(tmpRaw).metadata();
+  const cropLeft  = Math.floor(metadata.width * 0.40);
+  const cropWidth = metadata.width - cropLeft;
+
+  await sharp(tmpRaw)
+    .extract({ left: cropLeft, top: 0, width: cropWidth, height: metadata.height })
+    .toFile(tmpCrop);
 
   const worker = await createWorker('eng');
   try {
-    const { data: { text } } = await worker.recognize(tmpPath);
+    const { data: { text } } = await worker.recognize(tmpCrop);
     console.log('OCR raw output:\n', text);
     return text;
   } finally {
     await worker.terminate();
-    try { unlinkSync(tmpPath); } catch {}
+    try { unlinkSync(tmpRaw); } catch {}
+    try { unlinkSync(tmpCrop); } catch {}
   }
 }
 
 export function parseAttributes(ocrText) {
   const attrs = {};
+  const lines  = ocrText.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Extract all attribute names found anywhere in the text
-  const upperText = ocrText.toUpperCase();
-
-  // Find all numbers (2-digit) in the text with context
-  const lines = ocrText.split('\n').map(l => l.trim()).filter(Boolean);
-
-  // Strategy: find lines that contain known attribute names,
-  // then find the next line that contains numbers for those names
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
 
-    // Check if this line contains one or two known attribute names
+    // Find known attribute names in this line
     const foundNames = ALL_NAMES.filter(name => line.includes(name));
     if (foundNames.length === 0) continue;
 
@@ -103,8 +109,7 @@ export function parseAttributes(ocrText) {
     const numbers  = nextLine.match(/\b\d{2,3}\b/g);
     if (!numbers) continue;
 
-    // Match names to numbers positionally
-    // Sort by position in the line to preserve left-right order
+    // Sort names by position in line (left to right)
     const sortedNames = foundNames
       .map(name => ({ name, pos: line.indexOf(name) }))
       .sort((a, b) => a.pos - b.pos);
