@@ -1,5 +1,5 @@
 import './server.js';
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import axios from 'axios';
 import { config } from './config.js';
 import { handleCommand } from './handlers/commands.js';
@@ -14,8 +14,42 @@ export const client = new Client({
   ],
 });
 
-// userId → { type: 'recruit'|'config', id?, position?, archetype? }
 export const activeEdits = new Map();
+
+// Slash command definitions
+const commands = [
+  new SlashCommandBuilder()
+    .setName('analyze')
+    .setDescription('Analyze a recruit screenshot')
+    .addStringOption(o => o.setName('position').setDescription('Position e.g. QB').setRequired(true))
+    .addStringOption(o => o.setName('archetype').setDescription('Archetype e.g. Field General').setRequired(true))
+    .addAttachmentOption(o => o.setName('screenshot').setDescription('Recruit screenshot').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('config')
+    .setDescription('Set ideal attribute ranges for an archetype')
+    .addStringOption(o => o.setName('position').setDescription('Position').setRequired(true))
+    .addStringOption(o => o.setName('archetype').setDescription('Archetype').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('list-recruits')
+    .setDescription('View your saved recruits'),
+  new SlashCommandBuilder()
+    .setName('clear-recruit')
+    .setDescription('Delete a saved recruit by ID')
+    .addIntegerOption(o => o.setName('id').setDescription('Recruit ID').setRequired(true)),
+].map(c => c.toJSON());
+
+// Register commands then login
+async function start() {
+  try {
+    console.log('Registering slash commands...');
+    const rest = new REST({ version: '10' }).setToken(config.token);
+    await rest.put(Routes.applicationCommands(config.clientId), { body: commands });
+    console.log('Commands registered!');
+  } catch (err) {
+    console.error('Failed to register commands:', err.message);
+  }
+  client.login(config.token);
+}
 
 // Self-pinger to keep Render free tier awake
 const RENDER_URL =
@@ -25,7 +59,7 @@ const RENDER_URL =
     : null);
 
 if (RENDER_URL) {
-  console.log(`Self-pinger → ${RENDER_URL}/ping every 3 min`);
+  console.log(`Self-pinger active`);
   setInterval(async () => {
     try {
       await axios.get(`${RENDER_URL}/ping`, { timeout: 5000 });
@@ -35,7 +69,7 @@ if (RENDER_URL) {
   }, 3 * 60 * 1000);
 }
 
-// ── Crash protection ─────────────────────────────────────────────────────────
+// Crash protection
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err.message);
 });
@@ -52,8 +86,8 @@ client.on('shardError', (err) => {
   console.error('Shard error (will auto-reconnect):', err.message);
 });
 
-// ── Event handlers ───────────────────────────────────────────────────────────
-client.once('ready', () => console.log(`✅ Notes Server Bot online: ${client.user.tag}`));
+// Event handlers
+client.once('ready', () => console.log(`Notes Server Bot online: ${client.user.tag}`));
 
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -61,7 +95,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton())           return handleButton(interaction);
   } catch (err) {
     console.error('Interaction error:', err);
-    const msg = { content: '❌ Something went wrong.', ephemeral: true };
+    const msg = { content: 'Something went wrong.', ephemeral: true };
     if (interaction.deferred)      interaction.editReply(msg);
     else if (!interaction.replied) interaction.reply(msg);
   }
@@ -72,4 +106,4 @@ client.on('messageCreate', async (message) => {
   catch (err) { console.error('Message error:', err); }
 });
 
-client.login(config.token);
+start();
