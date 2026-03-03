@@ -145,7 +145,7 @@ export async function handleButton(interaction) {
 
     const { data: recruit, error } = await supabase
       .from('recruits')
-      .insert({ user_id: interaction.user.id, position, archetype, attributes, status: 'pending' })
+      .insert({ user_id: interaction.user.id, position: position.toUpperCase(), archetype, attributes, status: 'pending' })
       .select()
       .single();
 
@@ -179,10 +179,10 @@ export async function handleButton(interaction) {
 
     let { data: arch } = await supabase
       .from('archetypes').select('ranges')
-      .eq('position', position).eq('archetype', archetype).single();
+      .eq('position', position.toUpperCase()).eq('archetype', archetype).single();
 
     if (!arch) {
-      await supabase.from('archetypes').insert({ position, archetype, ranges: {} });
+      await supabase.from('archetypes').insert({ position: position.toUpperCase(), archetype, ranges: {} });
       arch = { ranges: {} };
     }
 
@@ -214,7 +214,7 @@ export async function handleButton(interaction) {
 
     const { data: arch } = await supabase
       .from('archetypes').select('ranges')
-      .eq('position', position).eq('archetype', archetype).single();
+      .eq('position', position.toUpperCase()).eq('archetype', archetype).single();
 
     await interaction.update({
       content: '',
@@ -246,7 +246,9 @@ export async function handleButton(interaction) {
     const recruitId = parseInt(id.replace('edit_', ''));
     activeEdits.set(interaction.user.id, { type: 'recruit', id: recruitId });
     await interaction.reply({
-      content: 'Label Edit Mode — reply with `WrongName: CorrectName` to fix a label.\nExample: `Tackle: Catching`\nType `done` to finish or `cancel` to quit.',
+      content: 'Label Edit Mode — reply with `WRONG: CORRECT` to fix a label.
+Example: `TAK: CTH`
+Use abbreviations (SPD, ACC, CTH, TAK, etc.)\nType `done` to finish or `cancel` to quit.',
       flags: 64,
     });
   }
