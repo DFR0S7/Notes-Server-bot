@@ -64,6 +64,11 @@ const NAME_MAP = {
 
 const ALL_NAMES = Object.keys(NAME_MAP);
 
+// Reverse map: abbreviation → OCR name (for filtering by config)
+const ABBREV_TO_OCR = Object.fromEntries(
+  Object.entries(NAME_MAP).map(([ocr, abbrev]) => [abbrev, ocr])
+);
+
 export async function performOCR(imageUrl) {
   const tmpRaw  = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
   const tmpCrop = join(tmpdir(), 'recruit_crop_' + Date.now() + '.png');
@@ -92,15 +97,20 @@ export async function performOCR(imageUrl) {
   }
 }
 
-export function parseAttributes(ocrText) {
+export function parseAttributes(ocrText, configuredAttrs = null) {
   const attrs = {};
   const lines  = ocrText.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // If configuredAttrs provided, only look for those OCR names
+  const targetNames = configuredAttrs
+    ? configuredAttrs.map(a => ABBREV_TO_OCR[a]).filter(Boolean)
+    : ALL_NAMES;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
 
     // Find known attribute names in this line
-    const foundNames = ALL_NAMES.filter(name => line.includes(name));
+    const foundNames = targetNames.filter(name => line.includes(name));
     if (foundNames.length === 0) continue;
 
     // Next line should have the numbers
