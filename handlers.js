@@ -125,6 +125,23 @@ export async function handleButton(interaction) {
       return interaction.update({ content: 'Session expired. Please run /analyze again.', components: [] });
     }
 
+    // Check config exists and has ranges before running OCR
+    const { data: arch } = await supabase
+      .from('archetypes')
+      .select('ranges')
+      .eq('position', position.toUpperCase())
+      .eq('archetype', archetype)
+      .single();
+
+    const configuredAttrs = arch?.ranges ? Object.keys(arch.ranges) : [];
+
+    if (configuredAttrs.length === 0) {
+      return interaction.update({
+        content: 'No ranges configured for **' + position + ' ' + archetype + '**.\nPlease run `/config` first to set up attribute ranges before analyzing.',
+        components: [],
+      });
+    }
+
     await interaction.update({ content: 'Running OCR — this may take 10-20 seconds...', components: [] });
 
     let ocrText;
@@ -136,7 +153,7 @@ export async function handleButton(interaction) {
       return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
     }
 
-    const attributes = parseAttributes(ocrText);
+    const attributes = parseAttributes(ocrText, configuredAttrs);
     activeEdits.delete(interaction.user.id);
 
     if (Object.keys(attributes).length === 0) {
