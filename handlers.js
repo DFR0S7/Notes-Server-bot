@@ -246,9 +246,7 @@ export async function handleButton(interaction) {
     const recruitId = parseInt(id.replace('edit_', ''));
     activeEdits.set(interaction.user.id, { type: 'recruit', id: recruitId });
     await interaction.reply({
-      content: 'Label Edit Mode — reply with `WRONG: CORRECT` to fix a label.
-Example: `TAK: CTH`
-Use abbreviations (SPD, ACC, CTH, TAK, etc.)\nType `done` to finish or `cancel` to quit.',
+      content: 'Label Edit Mode - reply with WRONG: CORRECT to fix a label.\nExample: TAK: CTH\nUse abbreviations (SPD, ACC, CTH, TAK, etc.)\nType done to finish or cancel to quit.',
       flags: 64,
     });
   }
