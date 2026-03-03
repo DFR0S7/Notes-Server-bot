@@ -16,20 +16,20 @@ export async function handleCommand(interaction) {
   if (commandName === 'analyze') {
     const attachment = interaction.options.getAttachment('screenshot');
     if (!attachment?.contentType?.startsWith('image/')) {
-      return interaction.reply({ content: 'Please attach a valid image file.', ephemeral: true });
+      return interaction.reply({ content: 'Please attach a valid image file.', flags: 64 });
     }
     activeEdits.set(interaction.user.id, { type: 'analyze_pending', attachmentUrl: attachment.url });
-    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('analyze'), ephemeral: true });
+    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('analyze'), flags: 64 });
   }
 
   // /config
   if (commandName === 'config') {
-    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('config'), ephemeral: true });
+    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('config'), flags: 64 });
   }
 
   // /view-config
   if (commandName === 'view-config') {
-    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('view'), ephemeral: true });
+    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('view'), flags: 64 });
   }
 
   // /list-recruits
@@ -42,7 +42,7 @@ export async function handleCommand(interaction) {
       .limit(20);
 
     if (error || !data?.length) {
-      return interaction.reply({ content: 'No recruits saved yet. Use /analyze to add one!', ephemeral: true });
+      return interaction.reply({ content: 'No recruits saved yet. Use /analyze to add one!', flags: 64 });
     }
 
     const lines = data.map(r => {
@@ -51,7 +51,7 @@ export async function handleCommand(interaction) {
       return '#' + r.id + ' | ' + r.position + ' ' + r.archetype + ' | Fit: ' + score + ' | ' + date;
     }).join('\n');
 
-    await interaction.reply({ content: 'Your Recruits (last 20)\n' + lines, ephemeral: true });
+    await interaction.reply({ content: 'Your Recruits (last 20)\n' + lines, flags: 64 });
   }
 
   // /clear-recruit
@@ -65,13 +65,13 @@ export async function handleCommand(interaction) {
       .single();
 
     if (!data) {
-      return interaction.reply({ content: 'Recruit #' + id + ' not found or does not belong to you.', ephemeral: true });
+      return interaction.reply({ content: 'Recruit #' + id + ' not found or does not belong to you.', flags: 64 });
     }
 
     await interaction.reply({
       content: 'Delete #' + id + ' ' + data.position + ' ' + data.archetype + '? This cannot be undone.',
       components: [getDeleteRow(id)],
-      ephemeral: true,
+      flags: 64,
     });
   }
 }
@@ -225,7 +225,7 @@ export async function handleButton(interaction) {
     activeEdits.set(interaction.user.id, { type: 'recruit', id: recruitId });
     await interaction.reply({
       content: 'Edit Mode - reply with "AttributeName: value" (e.g. Speed: 92).\nType "done" to save or "cancel" to quit.',
-      ephemeral: true,
+      flags: 64,
     });
   }
 
@@ -246,7 +246,7 @@ export async function handleButton(interaction) {
     activeEdits.set(interaction.user.id, { type: 'config', position, archetype });
     await interaction.reply({
       content: 'Range Edit Mode - paste all ranges at once, one per line:\nExample:\nSpeed 82 95\nThrow Power 88 99\n\nType "done" when finished to see full summary.',
-      ephemeral: true,
+      flags: 64,
     });
   }
 

@@ -63,7 +63,7 @@ process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', 
 client.on('error', (err) => console.error('Discord client error:', err.message));
 client.on('shardError', (err) => console.error('Shard error:', err.message));
 
-client.once('ready', () => console.log('Notes Server Bot online: ' + client.user.tag));
+client.once('clientReady', () => console.log('Notes Server Bot online: ' + client.user.tag));
 
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -71,7 +71,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton())           return handleButton(interaction);
   } catch (err) {
     console.error('Interaction error:', err);
-    const msg = { content: 'Something went wrong.', ephemeral: true };
+    const msg = { content: 'Something went wrong.', flags: 64 };
     if (interaction.deferred)      interaction.editReply(msg);
     else if (!interaction.replied) interaction.reply(msg);
   }
