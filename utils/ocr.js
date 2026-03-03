@@ -5,75 +5,74 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
 
-// Known CFB26 attribute names as they appear in OCR (uppercase)
+// Maps OCR text (uppercase) → abbreviation used in config
 const NAME_MAP = {
-  'AWARENESS':            'Awareness',
-  'SPEED':                'Speed',
-  'ACCELERATION':         'Acceleration',
-  'AGILITY':              'Agility',
-  'STRENGTH':             'Strength',
-  'JUMP':                 'Jump',
-  'STAMINA':              'Stamina',
-  'INJURY':               'Injury',
-  'THROW POWER':          'Throw Power',
-  'SHORT ACCURACY':       'Short Acc',
-  'MID ACCURACY':         'Mid Acc',
-  'DEEP ACCURACY':        'Deep Acc',
-  'THROW ON RUN':         'Throw On Run',
-  'PLAY ACTION':          'Play Action',
-  'BREAK SACK':           'Break Sack',
-  'CARRYING':             'Carrying',
-  'CATCHING':             'Catching',
-  'CATCH IN TRAFFIC':     'Catch In Traffic',
-  'SPECTACULAR CATCH':    'Spec Catch',
-  'ROUTE RUNNING':        'Route Running',
-  'SHORT ROUTE':          'Short Route',
-  'MED ROUTE':            'Med Route',
-  'DEEP ROUTE':           'Deep Route',
-  'RELEASE':              'Release',
-  'BREAK TACKLE':         'Break Tackle',
-  'TRUCKING':             'Trucking',
-  'ELUSIVENESS':          'Elusiveness',
-  'BC VISION':            'BC Vision',
-  'SPIN MOVE':            'Spin Move',
-  'JUKE MOVE':            'Juke Move',
-  'CHANGE OF DIRECTION':  'Change of Direction',
-  'STIFF ARM':            'Stiff Arm',
-  'TACKLE':               'Tackle',
-  'HIT POWER':            'Hit Power',
-  'PURSUIT':              'Pursuit',
-  'PLAY RECOGNITION':     'Play Recognition',
-  'MAN COVERAGE':         'Man Coverage',
-  'ZONE COVERAGE':        'Zone Coverage',
-  'PRESS':                'Press',
-  'POWER MOVES':          'Power Moves',
-  'FINESSE MOVES':        'Finesse Moves',
-  'BLOCK SHEDDING':       'Block Shedding',
-  'PASS BLOCK':           'Pass Block',
-  'RUN BLOCK':            'Run Block',
-  'PASS BLOCK POWER':     'Pass Block Power',
-  'PASS BLOCK FINESSE':   'Pass Block Finesse',
-  'RUN BLOCK POWER':      'Run Block Power',
-  'RUN BLOCK FINESSE':    'Run Block Finesse',
-  'LEAD BLOCK':           'Lead Block',
-  'IMPACT BLOCKING':      'Impact Blocking',
-  'KICK POWER':           'Kick Power',
-  'KICK ACCURACY':        'Kick Accuracy',
-  'KICK RETURN':          'Kick Return',
+  'AWARENESS':            'AWR',
+  'SPEED':                'SPD',
+  'ACCELERATION':         'ACC',
+  'AGILITY':              'AGI',
+  'STRENGTH':             'STR',
+  'JUMP':                 'JMP',
+  'STAMINA':              'STA',
+  'INJURY':               'INJ',
+  'THROW POWER':          'THP',
+  'SHORT ACCURACY':       'SAC',
+  'MID ACCURACY':         'MAC',
+  'DEEP ACCURACY':        'DAC',
+  'THROW ON RUN':         'TOR',
+  'PLAY ACTION':          'PAC',
+  'BREAK SACK':           'BSK',
+  'CARRYING':             'CAR',
+  'CATCHING':             'CTH',
+  'CATCH IN TRAFFIC':     'CIT',
+  'SPECTACULAR CATCH':    'SPC',
+  'ROUTE RUNNING':        'RTE',
+  'SHORT ROUTE':          'SRR',
+  'MED ROUTE':            'MRR',
+  'DEEP ROUTE':           'DRR',
+  'RELEASE':              'RLS',
+  'BREAK TACKLE':         'BTK',
+  'TRUCKING':             'TRK',
+  'ELUSIVENESS':          'ELU',
+  'BC VISION':            'BCV',
+  'SPIN MOVE':            'SPM',
+  'JUKE MOVE':            'JKM',
+  'CHANGE OF DIRECTION':  'COD',
+  'STIFF ARM':            'SFA',
+  'TACKLE':               'TAK',
+  'HIT POWER':            'HPW',
+  'PURSUIT':              'PUR',
+  'PLAY RECOGNITION':     'PRC',
+  'MAN COVERAGE':         'MCV',
+  'ZONE COVERAGE':        'ZCV',
+  'PRESS':                'PRS',
+  'POWER MOVES':          'POW',
+  'FINESSE MOVES':        'FNS',
+  'BLOCK SHEDDING':       'BSH',
+  'PASS BLOCK':           'PBK',
+  'RUN BLOCK':            'RBK',
+  'PASS BLOCK POWER':     'PBP',
+  'PASS BLOCK FINESSE':   'PBF',
+  'RUN BLOCK POWER':      'RBP',
+  'RUN BLOCK FINESSE':    'RBF',
+  'LEAD BLOCK':           'LBK',
+  'IMPACT BLOCKING':      'IBK',
+  'KICK POWER':           'KPW',
+  'KICK ACCURACY':        'KAC',
+  'KICK RETURN':          'KRT',
 };
 
 const ALL_NAMES = Object.keys(NAME_MAP);
 
 export async function performOCR(imageUrl) {
-  const tmpRaw    = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
-  const tmpCrop   = join(tmpdir(), 'recruit_crop_' + Date.now() + '.png');
+  const tmpRaw  = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
+  const tmpCrop = join(tmpdir(), 'recruit_crop_' + Date.now() + '.png');
 
-  // Download original image
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
 
-  // Auto-crop: keep only the right 60% of the image to remove Scout panel
-  const metadata = await sharp(tmpRaw).metadata();
+  // Crop left 40% off to remove Scout panel
+  const metadata  = await sharp(tmpRaw).metadata();
   const cropLeft  = Math.floor(metadata.width * 0.40);
   const cropWidth = metadata.width - cropLeft;
 
@@ -104,12 +103,12 @@ export function parseAttributes(ocrText) {
     const foundNames = ALL_NAMES.filter(name => line.includes(name));
     if (foundNames.length === 0) continue;
 
-    // Look at next line for numbers
+    // Next line should have the numbers
     const nextLine = (lines[i + 1] || '').trim();
     const numbers  = nextLine.match(/\b\d{2,3}\b/g);
     if (!numbers) continue;
 
-    // Sort names by position in line (left to right)
+    // Sort names left to right by position in line
     const sortedNames = foundNames
       .map(name => ({ name, pos: line.indexOf(name) }))
       .sort((a, b) => a.pos - b.pos);
@@ -118,13 +117,12 @@ export function parseAttributes(ocrText) {
       if (numbers[idx] !== undefined) {
         const value = parseInt(numbers[idx]);
         if (value >= 1 && value <= 99) {
-          const key = NAME_MAP[entry.name];
-          if (key) attrs[key] = value;
+          attrs[NAME_MAP[entry.name]] = value;
         }
       }
     });
 
-    i++; // skip the numbers line
+    i++;
   }
 
   console.log('Parsed attributes:', attrs);
