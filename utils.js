@@ -47,7 +47,7 @@ export function getArchetypeRows(commandType, position) {
 export function getConfirmRow(recruitId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('confirm_' + recruitId).setLabel('Confirm').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('edit_' + recruitId).setLabel('Edit').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('edit_' + recruitId).setLabel('Edit Labels').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('cancel_' + recruitId).setLabel('Cancel').setStyle(ButtonStyle.Danger),
   );
 }
@@ -66,8 +66,12 @@ export function createAnalysisEmbed(recruit) {
     .map(([k, v]) => '**' + k + '**: ' + v)
     .join('\n') || 'No attributes found';
 
+  const title = recruit.name
+    ? recruit.name + ' | ' + recruit.position + ' - ' + recruit.archetype
+    : 'Recruit: ' + recruit.position + ' - ' + recruit.archetype;
+
   return new EmbedBuilder()
-    .setTitle('Recruit: ' + recruit.position + ' - ' + recruit.archetype)
+    .setTitle(title)
     .setDescription('Review extracted attributes. Confirm to calculate fit score.')
     .addFields({ name: 'Attributes', value: attrText })
     .setColor(0x3498db)
@@ -75,15 +79,19 @@ export function createAnalysisEmbed(recruit) {
     .setTimestamp();
 }
 
-export function createBreakdownEmbed(score, breakdown, warning = null) {
+export function createBreakdownEmbed(recruit, score, breakdown, warning = null) {
   const color = score >= 80 ? 0x2ecc71 : score >= 60 ? 0xf39c12 : 0xe74c3c;
   const icon  = score >= 80 ? '🟢' : score >= 60 ? '🟡' : '🔴';
   const lines = breakdown.map(b =>
     (b.pass ? '✅' : '❌') + ' **' + b.attr + '**: ' + b.value + ' _(range: ' + b.min + '-' + b.max + ')_'
   ).join('\n') || 'No data';
 
+  const title = recruit?.name
+    ? icon + ' ' + recruit.name + ' — Fit Score: ' + score + '%'
+    : icon + ' Fit Score: ' + score + '%';
+
   const embed = new EmbedBuilder()
-    .setTitle(icon + ' Fit Score: ' + score + '%')
+    .setTitle(title)
     .addFields({ name: 'Attribute Breakdown', value: lines })
     .setColor(color)
     .setTimestamp();
@@ -126,6 +134,28 @@ export function createRangeSummaryEmbed(position, archetype, ranges) {
     })
     .setColor(0x2ecc71)
     .setFooter({ text: 'Use /config to edit these ranges' })
+    .setTimestamp();
+}
+
+export function createRecruitDetailEmbed(recruit) {
+  const attrs = recruit.attributes || {};
+  const attrText = Object.entries(attrs)
+    .map(([k, v]) => '**' + k + '**: ' + v)
+    .join('\n') || 'No attributes found';
+
+  const score = recruit.fit_score !== null ? recruit.fit_score + '%' : 'Not calculated';
+  const name  = recruit.name || 'Unnamed';
+  const date  = new Date(recruit.created_at).toLocaleDateString();
+
+  return new EmbedBuilder()
+    .setTitle(name + ' | ' + recruit.position + ' - ' + recruit.archetype)
+    .addFields(
+      { name: 'Fit Score', value: score, inline: true },
+      { name: 'Scouted', value: date, inline: true },
+      { name: 'Attributes', value: attrText },
+    )
+    .setColor(0x3498db)
+    .setFooter({ text: 'Recruit ID: ' + recruit.id })
     .setTimestamp();
 }
 

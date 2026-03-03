@@ -29,6 +29,10 @@ const commands = [
     .setName('list-recruits')
     .setDescription('View your saved recruits'),
   new SlashCommandBuilder()
+    .setName('recruit-detail')
+    .setDescription('View full attributes for a saved recruit')
+    .addIntegerOption(o => o.setName('id').setDescription('Recruit ID').setRequired(true)),
+  new SlashCommandBuilder()
     .setName('clear-recruit')
     .setDescription('Delete a saved recruit by ID')
     .addIntegerOption(o => o.setName('id').setDescription('Recruit ID').setRequired(true)),

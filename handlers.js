@@ -3,8 +3,8 @@ import { supabase } from './supabase.js';
 import { performOCR, parseAttributes } from './utils/ocr.js';
 import {
   getPositionRows, getArchetypeRows, getConfirmRow, getDeleteRow,
-  createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed, createRangeSummaryEmbed,
-  calculateFit,
+  createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
+  createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit,
 } from './utils.js';
 import { activeEdits } from './index.js';
 
@@ -36,7 +36,7 @@ export async function handleCommand(interaction) {
   if (commandName === 'list-recruits') {
     const { data, error } = await supabase
       .from('recruits')
-      .select('id, position, archetype, fit_score, created_at')
+      .select('id, name, position, archetype, fit_score, created_at')
       .eq('user_id', interaction.user.id)
       .order('created_at', { ascending: false })
       .limit(20);
@@ -46,12 +46,30 @@ export async function handleCommand(interaction) {
     }
 
     const lines = data.map(r => {
-      const score = r.fit_score !== null ? r.fit_score + '%' : 'Pending';
-      const date  = new Date(r.created_at).toLocaleDateString();
-      return '#' + r.id + ' | ' + r.position + ' ' + r.archetype + ' | Fit: ' + score + ' | ' + date;
+      const score      = r.fit_score !== null ? r.fit_score + '%' : 'Pending';
+      const date       = new Date(r.created_at).toLocaleDateString();
+      const recruitName = r.name || 'Unnamed';
+      return '`#' + r.id + '` | **' + recruitName + '** | ' + r.position + ' ' + r.archetype + ' | Fit: ' + score + ' | ' + date;
     }).join('\n');
 
-    await interaction.reply({ content: 'Your Recruits (last 20)\n' + lines, flags: 64 });
+    await interaction.reply({ content: '**Your Recruits (last 20)**\n' + lines + '\n\nUse `/recruit-detail id` to see full attributes.', flags: 64 });
+  }
+
+  // /recruit-detail
+  if (commandName === 'recruit-detail') {
+    const id = interaction.options.getInteger('id');
+    const { data, error } = await supabase
+      .from('recruits')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', interaction.user.id)
+      .single();
+
+    if (error || !data) {
+      return interaction.reply({ content: 'Recruit #' + id + ' not found or does not belong to you.', flags: 64 });
+    }
+
+    await interaction.reply({ embeds: [createRecruitDetailEmbed(data)], flags: 64 });
   }
 
   // /clear-recruit
@@ -59,7 +77,7 @@ export async function handleCommand(interaction) {
     const id = interaction.options.getInteger('id');
     const { data } = await supabase
       .from('recruits')
-      .select('id, position, archetype')
+      .select('id, name, position, archetype')
       .eq('id', id)
       .eq('user_id', interaction.user.id)
       .single();
@@ -68,8 +86,9 @@ export async function handleCommand(interaction) {
       return interaction.reply({ content: 'Recruit #' + id + ' not found or does not belong to you.', flags: 64 });
     }
 
+    const label = (data.name || 'Unnamed') + ' (' + data.position + ' ' + data.archetype + ')';
     await interaction.reply({
-      content: 'Delete #' + id + ' ' + data.position + ' ' + data.archetype + '? This cannot be undone.',
+      content: 'Delete **#' + id + ' — ' + label + '**? This cannot be undone.',
       components: [getDeleteRow(id)],
       flags: 64,
     });
@@ -132,10 +151,13 @@ export async function handleButton(interaction) {
 
     if (error) return interaction.editReply({ content: 'Failed to save recruit. Try again.' });
 
+    // Prompt for recruit name before confirming
+    activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
+
     await interaction.editReply({
-      content: 'Found **' + Object.keys(attributes).length + '** attributes for **' + position + ' ' + archetype + '**. Review and confirm:',
+      content: 'Found **' + Object.keys(attributes).length + '** attributes for **' + position + ' ' + archetype + '**.\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
       embeds: [createAnalysisEmbed(recruit)],
-      components: [getConfirmRow(recruit.id)],
+      components: [],
     });
   }
 
@@ -214,17 +236,17 @@ export async function handleButton(interaction) {
 
     await interaction.editReply({
       content: 'Saved! Fit Score: **' + score + '%**',
-      embeds: [createBreakdownEmbed(score, breakdown, warning)],
+      embeds: [createBreakdownEmbed(recruit, score, breakdown, warning)],
       components: [],
     });
   }
 
-  // edit_{id}
+  // edit_{id} — label correction mode
   if (id.startsWith('edit_') && !id.startsWith('edit_ranges')) {
     const recruitId = parseInt(id.replace('edit_', ''));
     activeEdits.set(interaction.user.id, { type: 'recruit', id: recruitId });
     await interaction.reply({
-      content: 'Edit Mode - reply with "AttributeName: value" (e.g. Speed: 92).\nType "done" to save or "cancel" to quit.',
+      content: 'Label Edit Mode — reply with `WrongName: CorrectName` to fix a label.\nExample: `Tackle: Catching`\nType `done` to finish or `cancel` to quit.',
       flags: 64,
     });
   }
@@ -272,6 +294,21 @@ export async function handleMessage(message) {
 
   const text = message.content.trim();
 
+  // ── Naming session ─────────────────────────────────────────────────────────
+  if (session.type === 'naming') {
+    const name = text.toLowerCase() === 'skip' ? null : text;
+    if (name) await supabase.from('recruits').update({ name }).eq('id', session.id);
+
+    const { data: recruit } = await supabase.from('recruits').select('*').eq('id', session.id).single();
+    activeEdits.delete(message.author.id);
+
+    return message.reply({
+      content: (name ? 'Name set to **' + name + '**! ' : '') + 'Confirm to calculate fit score:',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [getConfirmRow(session.id)],
+    });
+  }
+
   // cancel
   if (text.toLowerCase() === 'cancel') {
     activeEdits.delete(message.author.id);
@@ -285,7 +322,7 @@ export async function handleMessage(message) {
     if (session.type === 'recruit') {
       const { data: recruit } = await supabase.from('recruits').select('*').eq('id', session.id).single();
       return message.reply({
-        content: 'Edits saved! Confirm to calculate fit score:',
+        content: 'Labels updated! Confirm to calculate fit score:',
         embeds: [createAnalysisEmbed(recruit)],
         components: [getConfirmRow(session.id)],
       });
@@ -302,18 +339,27 @@ export async function handleMessage(message) {
     }
   }
 
-  // recruit edit: "Speed: 92"
+  // recruit label edit: "WrongName: CorrectName"
   if (session.type === 'recruit') {
-    const match = text.match(/^([A-Za-z\s]+):\s*(\d+)$/);
+    const match = text.match(/^(.+?):\s*(.+)$/);
     if (!match) return message.react('❓');
 
-    const attr  = match[1].trim();
-    const value = parseInt(match[2]);
-    if (value < 1 || value > 99) return message.reply('Value must be between 1 and 99.');
+    const oldLabel = match[1].trim();
+    const newLabel = match[2].trim();
 
     const { data } = await supabase.from('recruits').select('attributes').eq('id', session.id).single();
-    await supabase.from('recruits').update({ attributes: { ...data.attributes, [attr]: value } }).eq('id', session.id);
-    return message.reply('Updated **' + attr + '** to ' + value);
+    const attrs = { ...data.attributes };
+
+    if (!(oldLabel in attrs)) {
+      return message.reply('Could not find attribute **' + oldLabel + '**. Check the name matches exactly.');
+    }
+
+    const value    = attrs[oldLabel];
+    delete attrs[oldLabel];
+    attrs[newLabel] = value;
+
+    await supabase.from('recruits').update({ attributes: attrs }).eq('id', session.id);
+    return message.reply('Renamed **' + oldLabel + '** → **' + newLabel + '** (value: ' + value + ')');
   }
 
   // config range edit: all at once
