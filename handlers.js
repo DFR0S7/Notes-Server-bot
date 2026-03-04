@@ -33,7 +33,15 @@ export async function handleCommand(interaction) {
       return interaction.reply({ content: 'Unknown position **' + position + '**. Valid positions: ' + POSITIONS.join(', '), flags: 64 });
     }
 
-    if (ARCHETYPES[position]?.includes(archetype)) {
+    // Check Supabase for duplicates instead of in-memory
+    const { data: existing } = await supabase
+      .from('archetypes')
+      .select('id')
+      .eq('position', position)
+      .eq('archetype', archetype)
+      .single();
+
+    if (existing) {
       return interaction.reply({ content: '**' + archetype + '** already exists for **' + position + '**.', flags: 64 });
     }
 
@@ -41,10 +49,10 @@ export async function handleCommand(interaction) {
     if (!ARCHETYPES[position]) ARCHETYPES[position] = [];
     ARCHETYPES[position].push(archetype);
 
-    // Pre-create the archetype in Supabase so config works immediately
+    // Save to Supabase
     const { error } = await supabase
       .from('archetypes')
-      .upsert({ position, archetype, ranges: {} }, { onConflict: 'position,archetype' });
+      .insert({ position, archetype, ranges: {} });
 
     if (error) {
       console.error('Failed to create archetype:', error);
@@ -52,7 +60,7 @@ export async function handleCommand(interaction) {
     }
 
     await interaction.reply({
-      content: '✅ Added **' + archetype + '** to **' + position + '**!\n\nNote: this persists in the database but the button list resets on bot restart. To make it permanent, add it to `utils.js`.',
+      content: '✅ Added **' + archetype + '** to **' + position + '**! You can now use `/config` to set ranges and `/analyze` to scout recruits.\n\nNote: the button will appear immediately but resets on bot restart. To make it permanent, add it to `utils.js`.',
       flags: 64,
     });
   }
