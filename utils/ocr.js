@@ -20,6 +20,7 @@ const NAME_MAP = {
   'MID ACCURACY':         'MAC',
   'DEEP ACCURACY':        'DAC',
   'THROW ON RUN':         'TOR',
+  'UNDER PRESSURE':       'UPR',
   'PLAY ACTION':          'PAC',
   'BREAK SACK':           'BSK',
   'CARRYING':             'CAR',
@@ -76,10 +77,10 @@ export async function performOCR(imageUrl) {
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
 
-  // Crop left 40% off to remove Scout panel
-  const metadata  = await sharp(tmpRaw).metadata();
-  const cropLeft  = Math.floor(metadata.width * 0.40);
-  const cropWidth = metadata.width - cropLeft;
+  // Crop: remove left 40% (Scout panel) and right 20% (Abilities panel)
+  const metadata   = await sharp(tmpRaw).metadata();
+  const cropLeft   = Math.floor(metadata.width * 0.40);
+  const cropWidth  = Math.floor(metadata.width * 0.40); // middle 40%
 
   await sharp(tmpRaw)
     .extract({ left: cropLeft, top: 0, width: cropWidth, height: metadata.height })
@@ -107,7 +108,50 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     : ALL_NAMES).sort((a, b) => b.length - a.length);
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
+    // Clean line: remove non-alpha, collapse spaces, fix common OCR spacing errors
+    const raw  = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
+    const line = raw
+      .replace(/THROWPOWER/g, 'THROW POWER')
+      .replace(/SHORTACCURACY/g, 'SHORT ACCURACY')
+      .replace(/MIDACCURACY/g, 'MID ACCURACY')
+      .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
+      .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
+      .replace(/THROWONRUN/g, 'THROW ON RUN')
+      .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
+      .replace(/PLAYACTION/g, 'PLAY ACTION')
+      .replace(/BREAKSACK/g, 'BREAK SACK')
+      .replace(/CATCHINTRAFFIC/g, 'CATCH IN TRAFFIC')
+      .replace(/SPECTACULARCATCH/g, 'SPECTACULAR CATCH')
+      .replace(/ROUTERUNNING/g, 'ROUTE RUNNING')
+      .replace(/SHORTROUTE/g, 'SHORT ROUTE')
+      .replace(/MEDROUTE/g, 'MED ROUTE')
+      .replace(/DEEPROUTE/g, 'DEEP ROUTE')
+      .replace(/BREAKTACKLE/g, 'BREAK TACKLE')
+      .replace(/BCVISION/g, 'BC VISION')
+      .replace(/SPINMOVE/g, 'SPIN MOVE')
+      .replace(/JUKEMOVE/g, 'JUKE MOVE')
+      .replace(/CHANGEOFDIRECTION/g, 'CHANGE OF DIRECTION')
+      .replace(/STIFFARM/g, 'STIFF ARM')
+      .replace(/HITPOWER/g, 'HIT POWER')
+      .replace(/PLAYRECOGNITION/g, 'PLAY RECOGNITION')
+      .replace(/MANCOVERAGE/g, 'MAN COVERAGE')
+      .replace(/ZONECOVERAGE/g, 'ZONE COVERAGE')
+      .replace(/POWERMOVES/g, 'POWER MOVES')
+      .replace(/FINESSEMOVES/g, 'FINESSE MOVES')
+      .replace(/BLOCKSHEDDING/g, 'BLOCK SHEDDING')
+      .replace(/PASSBLOCKPOWER/g, 'PASS BLOCK POWER')
+      .replace(/PASSBLOCKFINESSE/g, 'PASS BLOCK FINESSE')
+      .replace(/RUNBLOCKPOWER/g, 'RUN BLOCK POWER')
+      .replace(/RUNBLOCKFINESSE/g, 'RUN BLOCK FINESSE')
+      .replace(/PASSBLOCK/g, 'PASS BLOCK')
+      .replace(/RUNBLOCK/g, 'RUN BLOCK')
+      .replace(/LEADBLOCK/g, 'LEAD BLOCK')
+      .replace(/IMPACTBLOCKING/g, 'IMPACT BLOCKING')
+      .replace(/KICKPOWER/g, 'KICK POWER')
+      .replace(/KICKACCURACY/g, 'KICK ACCURACY')
+      .replace(/KICKRETURN/g, 'KICK RETURN')
+      .replace(/\s+/g, ' ')
+      .trim();
 
     // Find known attribute names in this line
     // Use negative lookbehind so TACKLE won't match inside BREAK TACKLE
