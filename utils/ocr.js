@@ -58,7 +58,7 @@ const NAME_MAP = {
   'RUN BLOCK POWER':      'RBP',
   'RUN BLOCK FINESSE':    'RBF',
   'LEAD BLOCK':           'LBK',
-  'IMPACT BLOCKING':      'IBK',
+  'IMPACT BLOCKING':      'IBL',
   'KICK POWER':           'KPW',
   'KICK ACCURACY':        'KAC',
   'KICK RETURN':          'KRT',
