@@ -115,12 +115,17 @@ export async function performOCR(imageUrl) {
       .toFile(tmpRight),
   ]);
 
-  const worker = await createWorker('eng');
+  const textWorker   = await createWorker('eng');
+  const digitsWorker = await createWorker('eng');
   try {
-    const [nameResult, leftResult, rightResult] = await Promise.all([
-      worker.recognize(tmpName),
-      worker.recognize(tmpLeft),
-      worker.recognize(tmpRight),
+    await digitsWorker.setParameters({ tessedit_char_whitelist: '0123456789' });
+
+    const [nameResult, leftText, rightText, leftNums, rightNums] = await Promise.all([
+      textWorker.recognize(tmpName),
+      textWorker.recognize(tmpLeft),
+      textWorker.recognize(tmpRight),
+      digitsWorker.recognize(tmpLeft),
+      digitsWorker.recognize(tmpRight),
     ]);
 
     // Parse name: take only lines that are all caps letters, pick the two longest
@@ -130,15 +135,32 @@ export async function performOCR(imageUrl) {
       .filter(l => /^[A-Z]{2,}$/.test(l))
       .sort((a, b) => b.length - a.length)
       .slice(0, 2)
-      .reverse(); // first name before last name
+      .reverse();
     const recruitName = nameLines.join(' ') || null;
 
-    const combined = leftResult.data.text + '\n' + rightResult.data.text;
+    // Merge: use text pass for attribute names, digits pass for numbers
+    // Interleave lines: replace any line that looks like a number with the digits-only version
+    const mergeLines = (textOut, numsOut) => {
+      const textLines  = textOut.split('\n');
+      const numsLines  = numsOut.split('\n');
+      return textLines.map((line, i) => {
+        const trimmed = line.trim();
+        // If this line should be a number (next line after attribute name), use digits version
+        const numsLine = (numsLines[i] || '').trim().replace(/\s+/g, '');
+        if (/^\d+$/.test(numsLine) && numsLine.length >= 2) return numsLine;
+        return trimmed;
+      }).join('\n');
+    };
+
+    const combined = mergeLines(leftText.data.text, leftNums.data.text) + '\n' +
+                     mergeLines(rightText.data.text, rightNums.data.text);
+
     console.log('OCR name:', recruitName);
     console.log('OCR raw output:\n', combined);
     return { text: combined, name: recruitName };
   } finally {
-    await worker.terminate();
+    await textWorker.terminate();
+    await digitsWorker.terminate();
     try { unlinkSync(tmpRaw);   } catch {}
     try { unlinkSync(tmpName);  } catch {}
     try { unlinkSync(tmpLeft);  } catch {}
