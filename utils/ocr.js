@@ -80,12 +80,11 @@ export async function performOCR(imageUrl) {
   const w         = metadata.width;
   const h         = metadata.height;
 
-  // The attributes section sits roughly in the middle of the screen
-  // Split into left column (38-62%) and right column (62-86%) to OCR each cleanly
-  const leftStart  = Math.floor(w * 0.38);
-  const leftWidth  = Math.floor(w * 0.24);
-  const rightStart = Math.floor(w * 0.62);
-  const rightWidth = Math.floor(w * 0.24);
+  // Split into left column (33-58%) and right column (60-85%) to OCR each cleanly
+  const leftStart  = Math.floor(w * 0.33);
+  const leftWidth  = Math.floor(w * 0.25);
+  const rightStart = Math.floor(w * 0.60);
+  const rightWidth = Math.floor(w * 0.25);
 
   const tmpLeft  = join(tmpdir(), 'recruit_left_'  + Date.now() + '.png');
   const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
