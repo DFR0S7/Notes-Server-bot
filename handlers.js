@@ -187,22 +187,18 @@ export async function handleButton(interaction) {
 
     await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
 
-    let ocrText, recruitName = null, directAttrs = {};
+    let ocrText, recruitName = null;
     try {
       const ocrResult = await performOCR(session.attachmentUrl);
-      ocrText      = ocrResult.text;
-      recruitName  = ocrResult.name;
-      directAttrs  = ocrResult.directAttrs || {};
+      ocrText     = ocrResult.text;
+      recruitName = ocrResult.name;
     } catch (err) {
       console.error('OCR failed:', err);
       activeEdits.delete(interaction.user.id);
       return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
     }
 
-    const textAttrs  = parseAttributes(ocrText, configuredAttrs);
-    const attributes = Object.keys(directAttrs).length >= Object.keys(textAttrs).length
-      ? directAttrs
-      : textAttrs;
+    const attributes = parseAttributes(ocrText, configuredAttrs);
     activeEdits.delete(interaction.user.id);
 
     if (Object.keys(attributes).length === 0) {
