@@ -72,29 +72,43 @@ const ABBREV_TO_OCR = Object.fromEntries(
 
 export async function performOCR(imageUrl) {
   const tmpRaw  = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
-  const tmpCrop = join(tmpdir(), 'recruit_crop_' + Date.now() + '.png');
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
 
-  // Crop: remove left 40% (Scout panel) and right 20% (Abilities panel)
-  const metadata   = await sharp(tmpRaw).metadata();
-  const cropLeft   = Math.floor(metadata.width * 0.40);
-  const cropWidth  = Math.floor(metadata.width * 0.40); // middle 40%
+  const metadata  = await sharp(tmpRaw).metadata();
+  const w         = metadata.width;
+  const h         = metadata.height;
 
-  await sharp(tmpRaw)
-    .extract({ left: cropLeft, top: 0, width: cropWidth, height: metadata.height })
-    .toFile(tmpCrop);
+  // The attributes section sits roughly in the middle of the screen
+  // Split into left column (38-62%) and right column (62-86%) to OCR each cleanly
+  const leftStart  = Math.floor(w * 0.38);
+  const leftWidth  = Math.floor(w * 0.24);
+  const rightStart = Math.floor(w * 0.62);
+  const rightWidth = Math.floor(w * 0.24);
+
+  const tmpLeft  = join(tmpdir(), 'recruit_left_'  + Date.now() + '.png');
+  const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
+
+  await Promise.all([
+    sharp(tmpRaw).extract({ left: leftStart,  top: 0, width: leftWidth,  height: h }).toFile(tmpLeft),
+    sharp(tmpRaw).extract({ left: rightStart, top: 0, width: rightWidth, height: h }).toFile(tmpRight),
+  ]);
 
   const worker = await createWorker('eng');
   try {
-    const { data: { text } } = await worker.recognize(tmpCrop);
-    console.log('OCR raw output:\n', text);
-    return text;
+    const [leftResult, rightResult] = await Promise.all([
+      worker.recognize(tmpLeft),
+      worker.recognize(tmpRight),
+    ]);
+    const combined = leftResult.data.text + '\n' + rightResult.data.text;
+    console.log('OCR raw output:\n', combined);
+    return combined;
   } finally {
     await worker.terminate();
-    try { unlinkSync(tmpRaw); } catch {}
-    try { unlinkSync(tmpCrop); } catch {}
+    try { unlinkSync(tmpRaw);   } catch {}
+    try { unlinkSync(tmpLeft);  } catch {}
+    try { unlinkSync(tmpRight); } catch {}
   }
 }
 
