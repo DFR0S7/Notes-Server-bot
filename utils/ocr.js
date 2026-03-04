@@ -87,10 +87,23 @@ export async function performOCR(imageUrl) {
   const rightStart = Math.floor(w * 0.585);
   const rightWidth = Math.floor(w * 0.135);
 
+  // Name region: first name (smaller) + last name (larger) stacked in header
+  const nameStart = Math.floor(w * 0.44);
+  const nameWidth = Math.floor(w * 0.18);
+  const nameY1    = Math.floor(h * 0.166);  // ~360px at 2160h
+  const nameY2    = Math.floor(h * 0.268);  // ~580px at 2160h
+
+  const tmpName  = join(tmpdir(), 'recruit_name_'  + Date.now() + '.png');
   const tmpLeft  = join(tmpdir(), 'recruit_left_'  + Date.now() + '.png');
   const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
 
   await Promise.all([
+    sharp(tmpRaw)
+      .extract({ left: nameStart, top: nameY1, width: nameWidth, height: nameY2 - nameY1 })
+      .greyscale()
+      .normalise()
+      .linear(2.5, -(128 * 2.5) + 128)
+      .toFile(tmpName),
     sharp(tmpRaw)
       .extract({ left: leftStart, top: 0, width: leftWidth, height: h })
       .greyscale()
@@ -107,16 +120,30 @@ export async function performOCR(imageUrl) {
 
   const worker = await createWorker('eng');
   try {
-    const [leftResult, rightResult] = await Promise.all([
+    const [nameResult, leftResult, rightResult] = await Promise.all([
+      worker.recognize(tmpName),
       worker.recognize(tmpLeft),
       worker.recognize(tmpRight),
     ]);
+
+    // Parse name: take only lines that are all caps letters, pick the two longest
+    const nameLines = nameResult.data.text
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => /^[A-Z]{2,}$/.test(l))
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 2)
+      .reverse(); // first name before last name
+    const recruitName = nameLines.join(' ') || null;
+
     const combined = leftResult.data.text + '\n' + rightResult.data.text;
+    console.log('OCR name:', recruitName);
     console.log('OCR raw output:\n', combined);
-    return combined;
+    return { text: combined, name: recruitName };
   } finally {
     await worker.terminate();
     try { unlinkSync(tmpRaw);   } catch {}
+    try { unlinkSync(tmpName);  } catch {}
     try { unlinkSync(tmpLeft);  } catch {}
     try { unlinkSync(tmpRight); } catch {}
   }
