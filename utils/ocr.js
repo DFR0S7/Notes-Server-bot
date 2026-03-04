@@ -197,8 +197,12 @@ export async function performOCR(imageUrl) {
 
     const leftNames   = extractNamesInOrder(leftText.data.text);
     const rightNames  = extractNamesInOrder(rightText.data.text);
-    const leftDigits  = extractNumbersInOrder(leftNums.data.text);
-    const rightDigits = extractNumbersInOrder(rightNums.data.text);
+    const allLeftNums  = extractNumbersInOrder(leftNums.data.text);
+    const allRightNums = extractNumbersInOrder(rightNums.data.text);
+
+    // Take only the last N numbers to match name count (trims leading stray digits)
+    const leftDigits  = allLeftNums.slice(-leftNames.length);
+    const rightDigits = allRightNums.slice(-rightNames.length);
 
     // Build combined text for logging, but also build attrs directly
     const directAttrs = {};
