@@ -138,54 +138,79 @@ export async function performOCR(imageUrl) {
       .reverse();
     const recruitName = nameLines.join(' ') || null;
 
-    // Merge: use text pass for attribute names, digits pass for numbers
-    // Strategy: for each line in text output, if the number looks garbled,
-    // find the closest digit sequence from the digits pass at the same Y position
-    const mergeWithDigits = (textResult, numsResult) => {
-      const textLines = textResult.data.text.split('\n');
-      const numsWords = numsResult.data.words || [];
-
-      // Build a map of y-position -> number from digits pass
-      const numsByY = {};
-      for (const word of numsWords) {
-        if (/^\d{2,3}$/.test(word.text)) {
-          const y = Math.round(word.bbox.y0 / 20) * 20; // bucket by 20px
-          numsByY[y] = word.text;
-        }
-      }
-
-      // For each text line, if it looks like a bad number read, replace with digits pass
-      const textWords = textResult.data.words || [];
-      const wordsByLine = {};
-      for (const word of textWords) {
-        const y = Math.round(word.bbox.y0 / 20) * 20;
-        if (!wordsByLine[y]) wordsByLine[y] = [];
-        wordsByLine[y].push(word);
-      }
-
-      return textLines.map(line => {
-        const trimmed = line.trim();
-        // If line looks like it should be a number but isn't clean
-        if (trimmed && /^[A-Za-z0-9&|]{1,4}$/.test(trimmed) && !/^[A-Z]{3,}$/.test(trimmed)) {
-          // Find matching y bucket from digits pass
-          for (const [y, num] of Object.entries(numsByY)) {
-            // Check if any text word at this y matches this line
-            const lineWords = wordsByLine[y] || [];
-            if (lineWords.some(w => w.text.trim() === trimmed || lineWords.length <= 2)) {
-              return num;
-            }
+    // Merge strategy: extract attribute names in order from text pass,
+    // extract all 2-3 digit numbers in order from digits pass,
+    // zip them together
+    const extractNamesInOrder = (textOut) => {
+      const lines = textOut.split('\n').map(l => l.trim()).filter(Boolean);
+      const found = [];
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim()
+          .replace(/THROWPOWER/g, 'THROW POWER')
+          .replace(/SHORTACCURACY/g, 'SHORT ACCURACY')
+          .replace(/MIDACCURACY/g, 'MID ACCURACY')
+          .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
+          .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
+          .replace(/THROWONRUN/g, 'THROW ON RUN')
+          .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
+          .replace(/BREAKSACK/g, 'BREAK SACK')
+          .replace(/CATCHINTRAFFIC/g, 'CATCH IN TRAFFIC')
+          .replace(/SPECTACULARCATCH/g, 'SPECTACULAR CATCH')
+          .replace(/CHANGEOFDIR\w*/g, 'CHANGE OF DIRECTION')
+          .replace(/BLOCKSHED\w*/g, 'BLOCK SHEDDING')
+          .replace(/PLAYRECOG\w*/g, 'PLAY RECOGNITION')
+          .replace(/PASSBLOCK(?!ING)\b/g, 'PASS BLOCK')
+          .replace(/RUNBLOCK(?!ING)\b/g, 'RUN BLOCK')
+          .replace(/PASSBLOCKPOWER/g, 'PASS BLOCK POWER')
+          .replace(/PASSBLOCKFINESSE/g, 'PASS BLOCK FINESSE')
+          .replace(/RUNBLOCKPOWER/g, 'RUN BLOCK POWER')
+          .replace(/RUNBLOCKFINESSE/g, 'RUN BLOCK FINESSE')
+          .replace(/IMPACTBLOCKING/g, 'IMPACT BLOCKING')
+          .replace(/MANCOVERAGE/g, 'MAN COVERAGE')
+          .replace(/ZONECOVERAGE/g, 'ZONE COVERAGE')
+          .replace(/BREAKtackle/gi, 'BREAK TACKLE')
+          .replace(/JUKEMOVE/gi, 'JUKE MOVE')
+          .replace(/SPINMOVE/gi, 'SPIN MOVE')
+          .replace(/BCVISION/gi, 'BC VISION')
+          .replace(/BREAKTACKLE/gi, 'BREAK TACKLE')
+          .replace(/SHORTROUTE/g, 'SHORT ROUTE')
+          .replace(/MEDIUMROUTE/g, 'MEDIUM ROUTE')
+          .replace(/DEEPROUTE/g, 'DEEP ROUTE')
+          .replace(/RUNBLOCK$/g, 'RUN BLOCK');
+        for (const name of ALL_NAMES) {
+          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const pattern = name === 'TACKLE'
+            ? /(?<!BREAK )TACKLE/.test(raw)
+            : new RegExp('(?<![A-Z])' + escaped + '(?![A-Z])').test(raw);
+          if (pattern && !found.includes(name)) {
+            found.push(name);
+            break;
           }
         }
-        return trimmed;
-      }).join('\n');
+      }
+      return found;
     };
 
-    const combined = mergeWithDigits(leftText, leftNums) + '\n' +
-                     mergeWithDigits(rightText, rightNums);
+    const extractNumbersInOrder = (numsOut) => {
+      return (numsOut.match(/\b\d{2,3}\b/g) || []).map(Number).filter(n => n >= 1 && n <= 99);
+    };
+
+    const leftNames   = extractNamesInOrder(leftText.data.text);
+    const rightNames  = extractNamesInOrder(rightText.data.text);
+    const leftDigits  = extractNumbersInOrder(leftNums.data.text);
+    const rightDigits = extractNumbersInOrder(rightNums.data.text);
+
+    // Build combined text for logging, but also build attrs directly
+    const directAttrs = {};
+    leftNames.forEach((name, i)  => { if (leftDigits[i]  !== undefined) directAttrs[NAME_MAP[name]] = leftDigits[i]; });
+    rightNames.forEach((name, i) => { if (rightDigits[i] !== undefined) directAttrs[NAME_MAP[name]] = rightDigits[i]; });
+
+    const combined = leftText.data.text + '\n' + rightText.data.text;
 
     console.log('OCR name:', recruitName);
     console.log('OCR raw output:\n', combined);
-    return { text: combined, name: recruitName };
+    console.log('Direct attrs:', directAttrs);
+    return { text: combined, name: recruitName, directAttrs };
   } finally {
     await textWorker.terminate();
     await digitsWorker.terminate();
