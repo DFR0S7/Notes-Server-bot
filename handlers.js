@@ -185,7 +185,7 @@ export async function handleButton(interaction) {
       });
     }
 
-    await interaction.update({ content: 'Running OCR — this may take 10-20 seconds...', components: [] });
+    await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
 
     let ocrText;
     try {
