@@ -101,17 +101,27 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
   const attrs = {};
   const lines  = ocrText.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // If configuredAttrs provided, only look for those OCR names
-  const targetNames = configuredAttrs
+  // Sort longest first so BREAK TACKLE is matched before TACKLE
+  const targetNames = (configuredAttrs
     ? configuredAttrs.map(a => ABBREV_TO_OCR[a]).filter(Boolean)
-    : ALL_NAMES;
+    : ALL_NAMES).sort((a, b) => b.length - a.length);
+
+  console.log('Target OCR names:', targetNames);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
 
     // Find known attribute names in this line
-    const foundNames = targetNames.filter(name => line.includes(name));
+    // Use negative lookbehind so TACKLE won't match inside BREAK TACKLE
+    const foundNames = targetNames.filter(name => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = name === 'TACKLE'
+        ? /(?<!BREAK )TACKLE(?! )/.test(line)
+        : new RegExp('(?<![A-Z])' + escaped + '(?![A-Z])').test(line);
+      return pattern;
+    });
     if (foundNames.length === 0) continue;
+    console.log('Line matched:', line, '| Found:', foundNames, '| Next line:', lines[i+1]);
 
     // Next line should have the numbers
     const nextLine = (lines[i + 1] || '').trim();
