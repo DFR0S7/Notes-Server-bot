@@ -168,11 +168,16 @@ export async function handleButton(interaction) {
 
     if (error) return interaction.editReply({ content: 'Failed to save recruit. Try again.' });
 
-    // Prompt for recruit name before confirming
     activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
 
+    const foundCount = Object.keys(attributes).length;
+    const missing    = configuredAttrs.filter(a => !(a in attributes));
+    const warning    = foundCount < 10
+      ? '\n⚠️ Only **' + foundCount + '/10** attributes found. Missing: **' + (missing.length ? missing.join(', ') : 'unknown') + '**. Use Edit Labels to fix.'
+      : '';
+
     await interaction.editReply({
-      content: 'Found **' + Object.keys(attributes).length + '** attributes for **' + position + ' ' + archetype + '**.\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+      content: 'Found **' + foundCount + '/10** attributes for **' + position + ' ' + archetype + '**.' + warning + '\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
       embeds: [createAnalysisEmbed(recruit)],
       components: [],
     });
@@ -263,7 +268,7 @@ export async function handleButton(interaction) {
     const recruitId = parseInt(id.replace('edit_', ''));
     activeEdits.set(interaction.user.id, { type: 'recruit', id: recruitId });
     await interaction.reply({
-      content: 'Label Edit Mode - reply with WRONG: CORRECT to fix a label.\nExample: TAK: CTH\nUse abbreviations (SPD, ACC, CTH, TAK, etc.)\nType done to finish or cancel to quit.',
+      content: 'Edit Mode - two commands available:\n• **Add/update value**: `ATTR: 66` (e.g. `TOR: 66`)\n• **Rename label**: `WRONG: CORRECT` (e.g. `TAK: CTH`)\n\nType `done` to finish or `cancel` to quit.',
       flags: 64,
     });
   }
@@ -356,27 +361,35 @@ export async function handleMessage(message) {
     }
   }
 
-  // recruit label edit: "WrongName: CorrectName"
+  // recruit edit: "WRONG: CORRECT" to rename, or "ATTR: 66" to add/update value
   if (session.type === 'recruit') {
     const match = text.match(/^(.+?):\s*(.+)$/);
     if (!match) return message.react('❓');
 
-    const oldLabel = match[1].trim();
-    const newLabel = match[2].trim();
+    const left  = match[1].trim();
+    const right = match[2].trim();
 
     const { data } = await supabase.from('recruits').select('attributes').eq('id', session.id).single();
     const attrs = { ...data.attributes };
 
-    if (!(oldLabel in attrs)) {
-      return message.reply('Could not find attribute **' + oldLabel + '**. Check the name matches exactly.');
+    // If right side is a number — add or update value
+    if (/^\d+$/.test(right)) {
+      const value = parseInt(right);
+      if (value < 1 || value > 99) return message.reply('Value must be between 1 and 99.');
+      attrs[left] = value;
+      await supabase.from('recruits').update({ attributes: attrs }).eq('id', session.id);
+      return message.reply('Set **' + left + '** to **' + value + '**');
     }
 
-    const value    = attrs[oldLabel];
-    delete attrs[oldLabel];
-    attrs[newLabel] = value;
-
+    // Otherwise treat as rename: left = old label, right = new label
+    if (!(left in attrs)) {
+      return message.reply('Could not find **' + left + '**. Check the abbreviation matches exactly.');
+    }
+    const value = attrs[left];
+    delete attrs[left];
+    attrs[right] = value;
     await supabase.from('recruits').update({ attributes: attrs }).eq('id', session.id);
-    return message.reply('Renamed **' + oldLabel + '** → **' + newLabel + '** (value: ' + value + ')');
+    return message.reply('Renamed **' + left + '** → **' + right + '** (value: ' + value + ')');
   }
 
   // config range edit: all at once
