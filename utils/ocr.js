@@ -106,8 +106,6 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     ? configuredAttrs.map(a => ABBREV_TO_OCR[a]).filter(Boolean)
     : ALL_NAMES).sort((a, b) => b.length - a.length);
 
-  console.log('Target OCR names:', targetNames);
-
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
 
@@ -121,7 +119,6 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       return pattern;
     });
     if (foundNames.length === 0) continue;
-    console.log('Line matched:', line, '| Found:', foundNames, '| Next line:', lines[i+1]);
 
     // Next line should have the numbers
     const nextLine = (lines[i + 1] || '').trim();
