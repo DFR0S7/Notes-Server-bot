@@ -91,8 +91,18 @@ export async function performOCR(imageUrl) {
   const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
 
   await Promise.all([
-    sharp(tmpRaw).extract({ left: leftStart,  top: 0, width: leftWidth,  height: h }).toFile(tmpLeft),
-    sharp(tmpRaw).extract({ left: rightStart, top: 0, width: rightWidth, height: h }).toFile(tmpRight),
+    sharp(tmpRaw)
+      .extract({ left: leftStart, top: 0, width: leftWidth, height: h })
+      .greyscale()
+      .normalise()
+      .linear(2.5, -(128 * 2.5) + 128)
+      .toFile(tmpLeft),
+    sharp(tmpRaw)
+      .extract({ left: rightStart, top: 0, width: rightWidth, height: h })
+      .greyscale()
+      .normalise()
+      .linear(2.5, -(128 * 2.5) + 128)
+      .toFile(tmpRight),
   ]);
 
   const worker = await createWorker('eng');
