@@ -102,19 +102,16 @@ export async function performOCR(imageUrl) {
       .extract({ left: nameStart, top: nameY1, width: nameWidth, height: nameY2 - nameY1 })
       .greyscale()
       .normalise()
-      .linear(2.5, -(128 * 2.5) + 128)
       .toFile(tmpName),
     sharp(tmpRaw)
       .extract({ left: leftStart, top: 0, width: leftWidth, height: h })
       .greyscale()
       .normalise()
-      .linear(2.5, -(128 * 2.5) + 128)
       .toFile(tmpLeft),
     sharp(tmpRaw)
       .extract({ left: rightStart, top: 0, width: rightWidth, height: h })
       .greyscale()
       .normalise()
-      .linear(2.5, -(128 * 2.5) + 128)
       .toFile(tmpRight),
   ]);
 
