@@ -26,6 +26,17 @@ const commands = [
     .setName('view-config')
     .setDescription('View configured ranges for a position and archetype'),
   new SlashCommandBuilder()
+    .setName('add-archetype')
+    .setDescription('Add a new archetype to a position')
+    .addStringOption(o => o
+      .setName('position')
+      .setDescription('Position (e.g. ATH)')
+      .setRequired(true))
+    .addStringOption(o => o
+      .setName('archetype')
+      .setDescription('New archetype name')
+      .setRequired(true)),
+  new SlashCommandBuilder()
     .setName('list-recruits')
     .setDescription('View your saved recruits'),
   new SlashCommandBuilder()

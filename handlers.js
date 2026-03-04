@@ -22,6 +22,41 @@ export async function handleCommand(interaction) {
     await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('analyze'), flags: 64 });
   }
 
+  // /add-archetype
+  if (commandName === 'add-archetype') {
+    const position  = interaction.options.getString('position').toUpperCase();
+    const archetype = interaction.options.getString('archetype').trim();
+
+    const { POSITIONS, ARCHETYPES } = await import('./utils.js');
+
+    if (!POSITIONS.includes(position)) {
+      return interaction.reply({ content: 'Unknown position **' + position + '**. Valid positions: ' + POSITIONS.join(', '), flags: 64 });
+    }
+
+    if (ARCHETYPES[position]?.includes(archetype)) {
+      return interaction.reply({ content: '**' + archetype + '** already exists for **' + position + '**.', flags: 64 });
+    }
+
+    // Add to in-memory list
+    if (!ARCHETYPES[position]) ARCHETYPES[position] = [];
+    ARCHETYPES[position].push(archetype);
+
+    // Pre-create the archetype in Supabase so config works immediately
+    const { error } = await supabase
+      .from('archetypes')
+      .upsert({ position, archetype, ranges: {} }, { onConflict: 'position,archetype' });
+
+    if (error) {
+      console.error('Failed to create archetype:', error);
+      return interaction.reply({ content: 'Added **' + archetype + '** to **' + position + '** for this session, but failed to save to database.', flags: 64 });
+    }
+
+    await interaction.reply({
+      content: '✅ Added **' + archetype + '** to **' + position + '**!\n\nNote: this persists in the database but the button list resets on bot restart. To make it permanent, add it to `utils.js`.',
+      flags: 64,
+    });
+  }
+
   // /config
   if (commandName === 'config') {
     await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('config'), flags: 64 });
