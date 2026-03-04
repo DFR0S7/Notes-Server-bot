@@ -93,7 +93,8 @@ export async function performOCR(imageUrl) {
   const nameY1    = Math.floor(h * 0.166);  // ~360px at 2160h
   const nameY2    = Math.floor(h * 0.268);  // ~580px at 2160h
 
-  const attrTop   = Math.floor(h * 0.394); // ~850px at 2160h - below header noise
+  const attrTopLeft  = Math.floor(h * 0.394); // ~850px - clears header for left col
+  const attrTopRight = Math.floor(h * 0.470); // ~1015px - clears 0/50 timer for right col
 
   const tmpName      = join(tmpdir(), 'recruit_name_'       + Date.now() + '.png');
   const tmpLeft      = join(tmpdir(), 'recruit_left_'       + Date.now() + '.png');
@@ -112,10 +113,10 @@ export async function performOCR(imageUrl) {
       .extract({ left: rightStart, top: 0, width: rightWidth, height: h })
       .greyscale().normalise().toFile(tmpRight),
     sharp(tmpRaw)
-      .extract({ left: leftStart, top: attrTop, width: leftWidth, height: h - attrTop })
+      .extract({ left: leftStart, top: attrTopLeft, width: leftWidth, height: h - attrTopLeft })
       .greyscale().normalise().toFile(tmpLeftAttr),
     sharp(tmpRaw)
-      .extract({ left: rightStart, top: attrTop, width: rightWidth, height: h - attrTop })
+      .extract({ left: rightStart, top: attrTopRight, width: rightWidth, height: h - attrTopRight })
       .greyscale().normalise().toFile(tmpRightAttr),
   ]);
 
