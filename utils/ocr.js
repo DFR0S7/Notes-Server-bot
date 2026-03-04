@@ -20,7 +20,7 @@ const NAME_MAP = {
   'MID ACCURACY':         'MAC',
   'DEEP ACCURACY':        'DAC',
   'THROW ON RUN':         'TOR',
-  'UNDER PRESSURE':       'UPR',
+  'UNDER PRESSURE':       'TUP',
   'PLAY ACTION':          'PAC',
   'BREAK SACK':           'BSK',
   'CARRYING':             'CAR',
