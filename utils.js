@@ -20,8 +20,49 @@ export const ARCHETYPES = {
   ATH: [],
 };
 
-// ── Button Builders ───────────────────────────────────────────────────────────
-function toRows(items, prefix) {
+// ── Attribute Display Order ───────────────────────────────────────────────────
+const QB_ORDER   = ['AWR','TOR','THP','TUP','SAC','BSK','MAC','SPD','DAC','ACC'];
+const HB_ORDER   = ['AWR','COD','SPD','JKM','ACC','SPM','CAR','BCV','BTK','CTH'];
+const CB_ORDER   = ['AWR','MCV','SPD','ZCV','ACC','PRS','COD','CTH','AGI','TAK'];
+const S_ORDER    = ['AWR','MCV','SPD','ZCV','ACC','PRS','COD','CTH','AGI','TAK'];
+const LB_ORDER   = ['AWR','TAK','SPD','HPW','ACC','PUR','STR','MCV','PRC','ZCV'];
+const DE_ORDER   = ['AWR','HPW','STR','PMV','ACC','FMV','BSH','SPD','TAK','PUR'];
+const DT_ORDER   = ['AWR','HPW','STR','PMV','ACC','FMV','BSH','SPD','TAK','PUR'];
+const OL_ORDER   = ['AWR','PBP','RBK','PBF','RBP','IBK','RBF','AGI','PBK','ACC'];
+const TE_DEFAULT = ['AWR','PBK','SPD','CTH','STR','CIT','ACC','SRR','RBK','MRR'];
+const TE_VERT    = ['AWR','PBK','SPD','CTH','STR','CIT','ACC','MRR','RBK','DRR'];
+const WR_GADGET  = ['AWR','SPC','SPD','SRR','ACC','MRR','CTH','DRR','CIT','THP'];
+const WR_DEFAULT = ['AWR','SPC','SPD','SRR','ACC','MRR','CTH','DRR','CIT','RLS'];
+const WR_AGILE   = ['AWR','SPC','SPD','SRR','ACC','MRR','CTH','DRR','CIT','AGI'];
+const WR_GRITTY  = ['AWR','SPC','SPD','SRR','ACC','MRR','CTH','DRR','CIT','RBK'];
+
+export function getAttributeOrder(position, archetype) {
+  switch (position) {
+    case 'QB':  return QB_ORDER;
+    case 'HB':  return HB_ORDER;
+    case 'CB':  return CB_ORDER;
+    case 'S':   return S_ORDER;
+    case 'LB':  return LB_ORDER;
+    case 'DE':  return DE_ORDER;
+    case 'DT':  return DT_ORDER;
+    case 'OT':
+    case 'OG':
+    case 'C':   return OL_ORDER;
+    case 'TE':
+      return archetype === 'Vertical Threat' ? TE_VERT : TE_DEFAULT;
+    case 'WR':
+      if (archetype === 'Gadget')                                                return WR_GADGET;
+      if (archetype === 'Route Artist' || archetype === 'Elusive Route Runner') return WR_AGILE;
+      if (archetype === 'Gritty Possession')                                     return WR_GRITTY;
+      return WR_DEFAULT;
+    case 'ATH':
+      if (archetype === 'Thumper') return LB_ORDER;
+      return TE_DEFAULT;
+    default: return null;
+  }
+}
+
+
   const rows = [];
   for (let i = 0; i < items.length; i += 5) {
     const row = new ActionRowBuilder().addComponents(
@@ -63,9 +104,11 @@ export function getDeleteRow(recruitId) {
 // ── Embed Builders ────────────────────────────────────────────────────────────
 export function createAnalysisEmbed(recruit) {
   const attrs = recruit.attributes || {};
-  const attrText = Object.entries(attrs)
-    .map(([k, v]) => '**' + k + '**: ' + v)
-    .join('\n') || 'No attributes found';
+  const order = getAttributeOrder(recruit.position, recruit.archetype);
+  const sorted = order
+    ? order.filter(k => k in attrs).map(k => [k, attrs[k]])
+    : Object.entries(attrs);
+  const attrText = sorted.map(([k, v]) => '**' + k + '**: ' + v).join('\n') || 'No attributes found';
 
   const title = recruit.name
     ? recruit.name + ' | ' + recruit.position + ' - ' + recruit.archetype
@@ -83,7 +126,15 @@ export function createAnalysisEmbed(recruit) {
 export function createBreakdownEmbed(recruit, score, breakdown, warning = null) {
   const color = score >= 80 ? 0x2ecc71 : score >= 60 ? 0xf39c12 : 0xe74c3c;
   const icon  = score >= 80 ? '🟢' : score >= 60 ? '🟡' : '🔴';
-  const lines = breakdown.map(b =>
+  const order = getAttributeOrder(recruit?.position, recruit?.archetype);
+  const sorted = order
+    ? [...breakdown].sort((a, b) => {
+        const ai = order.indexOf(a.attr);
+        const bi = order.indexOf(b.attr);
+        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      })
+    : breakdown;
+  const lines = sorted.map(b =>
     (b.pass ? '✅' : '❌') + ' **' + b.attr + '**: ' + b.value + ' _(range: ' + b.min + '-' + b.max + ')_'
   ).join('\n') || 'No data';
 
@@ -126,12 +177,17 @@ export function createRangeSummaryEmbed(position, archetype, ranges) {
       .setTimestamp();
   }
 
+  const order = getAttributeOrder(position, archetype);
+  const sortedEntries = order
+    ? order.filter(k => k in ranges).map(k => [k, ranges[k]])
+    : entries;
+
   return new EmbedBuilder()
     .setTitle('Ranges: ' + position + ' - ' + archetype)
     .setDescription('All configured attribute ranges:')
     .addFields({
       name: entries.length + ' Attributes',
-      value: entries.map(([k, v]) => '**' + k + '**: ' + v.min + ' - ' + v.max).join('\n'),
+      value: sortedEntries.map(([k, v]) => '**' + k + '**: ' + v.min + ' - ' + v.max).join('\n'),
     })
     .setColor(0x2ecc71)
     .setFooter({ text: 'Use /config to edit these ranges' })
@@ -140,9 +196,11 @@ export function createRangeSummaryEmbed(position, archetype, ranges) {
 
 export function createRecruitDetailEmbed(recruit) {
   const attrs = recruit.attributes || {};
-  const attrText = Object.entries(attrs)
-    .map(([k, v]) => '**' + k + '**: ' + v)
-    .join('\n') || 'No attributes found';
+  const order = getAttributeOrder(recruit.position, recruit.archetype);
+  const sorted = order
+    ? order.filter(k => k in attrs).map(k => [k, attrs[k]])
+    : Object.entries(attrs);
+  const attrText = sorted.map(([k, v]) => '**' + k + '**: ' + v).join('\n') || 'No attributes found';
 
   const score = recruit.fit_score !== null ? recruit.fit_score + '%' : 'Not calculated';
   const name  = recruit.name || 'Unnamed';
