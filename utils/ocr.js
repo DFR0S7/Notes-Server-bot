@@ -18,6 +18,7 @@ const NAME_MAP = {
   'THROW POWER':          'THP',
   'SHORT ACCURACY':       'SAC',
   'MID ACCURACY':         'MAC',
+  'MEDIUM ACCURACY':      'MAC',
   'DEEP ACCURACY':        'DAC',
   'THROW ON RUN':         'TOR',
   'UNDER PRESSURE':       'TUP',
