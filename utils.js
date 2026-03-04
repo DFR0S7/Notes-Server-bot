@@ -2,7 +2,7 @@ import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'disc
 import { supabase } from './supabase.js';
 
 // ── CFB26 Positions & Archetypes ─────────────────────────────────────────────
-export const POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S'];
+export const POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH'];
 
 export const ARCHETYPES = {
   QB:  ['Backfield Creator','Dual Threat','Pocket Passer','Pure Runner'],
@@ -17,6 +17,7 @@ export const ARCHETYPES = {
   LB:  ['Lurker','Signal Caller','Thumper'],
   CB:  ['Field','Zone','Bump','Boundary'],
   S:   ['Coverage Specialist','Hybrid','Box'],
+  ATH: [],
 };
 
 // ── Button Builders ───────────────────────────────────────────────────────────
