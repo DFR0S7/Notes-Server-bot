@@ -63,6 +63,8 @@ export function getAttributeOrder(position, archetype) {
 }
 
 
+// ── Button Builders ───────────────────────────────────────────────────────────
+function toRows(items, prefix) {
   const rows = [];
   for (let i = 0; i < items.length; i += 5) {
     const row = new ActionRowBuilder().addComponents(
