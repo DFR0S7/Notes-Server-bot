@@ -215,9 +215,11 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     });
     if (foundNames.length === 0) continue;
 
-    // Next line should have the numbers
-    const nextLine = (lines[i + 1] || '').trim();
-    const numbers  = nextLine.match(/\b\d{2,3}\b/g);
+    // Next line should have the numbers — also check current raw line for inline numbers
+    const nextLine   = (lines[i + 1] || '').trim();
+    const inlineNums = lines[i].match(/\b\d{2,3}\b/g);
+    const nextNums   = nextLine.match(/\b\d{2,3}\b/g);
+    const numbers    = (nextNums && nextNums.length > 0) ? nextNums : inlineNums;
     if (!numbers) continue;
 
     // Sort names left to right by position in line
