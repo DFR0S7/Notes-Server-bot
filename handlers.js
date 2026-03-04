@@ -198,7 +198,9 @@ export async function handleButton(interaction) {
       return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
     }
 
-    const attributes = parseAttributes(ocrText, configuredAttrs);
+    const attributes = Object.keys(ocrResult.directAttrs).length >= Object.keys(parseAttributes(ocrText, configuredAttrs)).length
+      ? ocrResult.directAttrs
+      : parseAttributes(ocrText, configuredAttrs);
     activeEdits.delete(interaction.user.id);
 
     if (Object.keys(attributes).length === 0) {
