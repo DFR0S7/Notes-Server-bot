@@ -187,9 +187,11 @@ export async function handleButton(interaction) {
 
     await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
 
-    let ocrText;
+    let ocrText, recruitName = null;
     try {
-      ocrText = await performOCR(session.attachmentUrl);
+      const ocrResult = await performOCR(session.attachmentUrl);
+      ocrText     = ocrResult.text;
+      recruitName = ocrResult.name;
     } catch (err) {
       console.error('OCR failed:', err);
       activeEdits.delete(interaction.user.id);
@@ -205,13 +207,11 @@ export async function handleButton(interaction) {
 
     const { data: recruit, error } = await supabase
       .from('recruits')
-      .insert({ user_id: interaction.user.id, position: position.toUpperCase(), archetype, attributes, status: 'pending' })
+      .insert({ user_id: interaction.user.id, position: position.toUpperCase(), archetype, attributes, name: recruitName, status: 'pending' })
       .select()
       .single();
 
     if (error) return interaction.editReply({ content: 'Failed to save recruit. Try again.' });
-
-    activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
 
     const foundCount = Object.keys(attributes).length;
     const missing    = configuredAttrs.filter(a => !(a in attributes));
@@ -219,11 +219,23 @@ export async function handleButton(interaction) {
       ? '\n⚠️ Only **' + foundCount + '/10** attributes found. Missing: **' + (missing.length ? missing.join(', ') : 'unknown') + '**. Use Edit Labels to fix.'
       : '';
 
-    await interaction.editReply({
-      content: 'Found **' + foundCount + '/10** attributes for **' + position + ' ' + archetype + '**.' + warning + '\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
-      embeds: [createAnalysisEmbed(recruit)],
-      components: [],
-    });
+    if (recruitName) {
+      // Name found via OCR — skip naming prompt, go straight to confirm
+      activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
+      await interaction.editReply({
+        content: 'Found **' + foundCount + '/10** attributes for **' + recruitName + '** (' + position + ' ' + archetype + ').' + warning,
+        embeds: [createAnalysisEmbed(recruit)],
+        components: [getConfirmRow(recruit.id)],
+      });
+    } else {
+      // Name not found — ask user
+      activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
+      await interaction.editReply({
+        content: 'Found **' + foundCount + '/10** attributes for **' + position + ' ' + archetype + '**.' + warning + '\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+        embeds: [createAnalysisEmbed(recruit)],
+        components: [],
+      });
+    }
   }
 
   // config_pos_{POSITION}
