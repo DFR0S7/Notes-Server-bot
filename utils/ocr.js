@@ -120,17 +120,12 @@ export async function performOCR(imageUrl) {
       .greyscale().normalise().toFile(tmpRightAttr),
   ]);
 
-  const textWorker   = await createWorker('eng');
-  const digitsWorker = await createWorker('eng');
+  const textWorker = await createWorker('eng');
   try {
-    await digitsWorker.setParameters({ tessedit_char_whitelist: '0123456789' });
-
-    const [nameResult, leftText, rightText, leftNums, rightNums] = await Promise.all([
+    const [nameResult, leftText, rightText] = await Promise.all([
       textWorker.recognize(tmpName),
       textWorker.recognize(tmpLeft),
       textWorker.recognize(tmpRight),
-      digitsWorker.recognize(tmpLeftAttr),
-      digitsWorker.recognize(tmpRightAttr),
     ]);
 
     // Parse name: take only lines that are all caps letters, pick the two longest
@@ -196,14 +191,28 @@ export async function performOCR(imageUrl) {
       return found;
     };
 
-    const extractNumbersInOrder = (numsOut) => {
-      return (numsOut.match(/\b\d{2,3}\b/g) || []).map(Number).filter(n => n >= 1 && n <= 99);
+    const extractNumbersInOrder = (textOut) => {
+      // Extract 2-3 digit numbers from text, skip lines that are clearly noise
+      const results = [];
+      const lines = textOut.split('\n').map(l => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        // Skip lines with known non-attribute content
+        if (/TOP|NAT|STA|POS|SCOUT|ATTR|ABILITY|MENTAL|ARCHETY|BACKFI|RECRUIT|OVERVIEW/i.test(line)) continue;
+        const nums = line.match(/\b\d{2,3}\b/g);
+        if (nums) {
+          for (const n of nums) {
+            const v = parseInt(n);
+            if (v >= 1 && v <= 99) results.push(v);
+          }
+        }
+      }
+      return results;
     };
 
-    const leftNames   = extractNamesInOrder(leftText.data.text);
-    const rightNames  = extractNamesInOrder(rightText.data.text);
-    const allLeftNums  = extractNumbersInOrder(leftNums.data.text);
-    const allRightNums = extractNumbersInOrder(rightNums.data.text);
+    const leftNames    = extractNamesInOrder(leftText.data.text);
+    const rightNames   = extractNamesInOrder(rightText.data.text);
+    const allLeftNums  = extractNumbersInOrder(leftText.data.text);
+    const allRightNums = extractNumbersInOrder(rightText.data.text);
 
     console.log('Left names:', leftNames);
     console.log('Right names:', rightNames);
@@ -227,7 +236,6 @@ export async function performOCR(imageUrl) {
     return { text: combined, name: recruitName, directAttrs };
   } finally {
     await textWorker.terminate();
-    await digitsWorker.terminate();
     try { unlinkSync(tmpRaw);       } catch {}
     try { unlinkSync(tmpName);      } catch {}
     try { unlinkSync(tmpLeft);      } catch {}
