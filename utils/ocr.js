@@ -205,6 +205,11 @@ export async function performOCR(imageUrl) {
     const allLeftNums  = extractNumbersInOrder(leftNums.data.text);
     const allRightNums = extractNumbersInOrder(rightNums.data.text);
 
+    console.log('Left names:', leftNames);
+    console.log('Right names:', rightNames);
+    console.log('Left raw digits:', allLeftNums);
+    console.log('Right raw digits:', allRightNums);
+
     // Take only the last N numbers to match name count (trims leading stray digits)
     const leftDigits  = allLeftNums.slice(-leftNames.length);
     const rightDigits = allRightNums.slice(-rightNames.length);
