@@ -139,21 +139,49 @@ export async function performOCR(imageUrl) {
     const recruitName = nameLines.join(' ') || null;
 
     // Merge: use text pass for attribute names, digits pass for numbers
-    // Interleave lines: replace any line that looks like a number with the digits-only version
-    const mergeLines = (textOut, numsOut) => {
-      const textLines  = textOut.split('\n');
-      const numsLines  = numsOut.split('\n');
-      return textLines.map((line, i) => {
+    // Strategy: for each line in text output, if the number looks garbled,
+    // find the closest digit sequence from the digits pass at the same Y position
+    const mergeWithDigits = (textResult, numsResult) => {
+      const textLines = textResult.data.text.split('\n');
+      const numsWords = numsResult.data.words || [];
+
+      // Build a map of y-position -> number from digits pass
+      const numsByY = {};
+      for (const word of numsWords) {
+        if (/^\d{2,3}$/.test(word.text)) {
+          const y = Math.round(word.bbox.y0 / 20) * 20; // bucket by 20px
+          numsByY[y] = word.text;
+        }
+      }
+
+      // For each text line, if it looks like a bad number read, replace with digits pass
+      const textWords = textResult.data.words || [];
+      const wordsByLine = {};
+      for (const word of textWords) {
+        const y = Math.round(word.bbox.y0 / 20) * 20;
+        if (!wordsByLine[y]) wordsByLine[y] = [];
+        wordsByLine[y].push(word);
+      }
+
+      return textLines.map(line => {
         const trimmed = line.trim();
-        // If this line should be a number (next line after attribute name), use digits version
-        const numsLine = (numsLines[i] || '').trim().replace(/\s+/g, '');
-        if (/^\d+$/.test(numsLine) && numsLine.length >= 2) return numsLine;
+        // If line looks like it should be a number but isn't clean
+        if (trimmed && /^[A-Za-z0-9&|]{1,4}$/.test(trimmed) && !/^[A-Z]{3,}$/.test(trimmed)) {
+          // Find matching y bucket from digits pass
+          for (const [y, num] of Object.entries(numsByY)) {
+            // Check if any text word at this y matches this line
+            const lineWords = wordsByLine[y] || [];
+            if (lineWords.some(w => w.text.trim() === trimmed || lineWords.length <= 2)) {
+              return num;
+            }
+          }
+        }
         return trimmed;
       }).join('\n');
     };
 
-    const combined = mergeLines(leftText.data.text, leftNums.data.text) + '\n' +
-                     mergeLines(rightText.data.text, rightNums.data.text);
+    const combined = mergeWithDigits(leftText, leftNums) + '\n' +
+                     mergeWithDigits(rightText, rightNums);
 
     console.log('OCR name:', recruitName);
     console.log('OCR raw output:\n', combined);
