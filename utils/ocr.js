@@ -93,26 +93,30 @@ export async function performOCR(imageUrl) {
   const nameY1    = Math.floor(h * 0.166);  // ~360px at 2160h
   const nameY2    = Math.floor(h * 0.268);  // ~580px at 2160h
 
-  const tmpName  = join(tmpdir(), 'recruit_name_'  + Date.now() + '.png');
-  const tmpLeft  = join(tmpdir(), 'recruit_left_'  + Date.now() + '.png');
-  const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
+  const attrTop   = Math.floor(h * 0.394); // ~850px at 2160h - below header noise
+
+  const tmpName      = join(tmpdir(), 'recruit_name_'       + Date.now() + '.png');
+  const tmpLeft      = join(tmpdir(), 'recruit_left_'       + Date.now() + '.png');
+  const tmpRight     = join(tmpdir(), 'recruit_right_'      + Date.now() + '.png');
+  const tmpLeftAttr  = join(tmpdir(), 'recruit_left_attr_'  + Date.now() + '.png');
+  const tmpRightAttr = join(tmpdir(), 'recruit_right_attr_' + Date.now() + '.png');
 
   await Promise.all([
     sharp(tmpRaw)
       .extract({ left: nameStart, top: nameY1, width: nameWidth, height: nameY2 - nameY1 })
-      .greyscale()
-      .normalise()
-      .toFile(tmpName),
+      .greyscale().normalise().toFile(tmpName),
     sharp(tmpRaw)
       .extract({ left: leftStart, top: 0, width: leftWidth, height: h })
-      .greyscale()
-      .normalise()
-      .toFile(tmpLeft),
+      .greyscale().normalise().toFile(tmpLeft),
     sharp(tmpRaw)
       .extract({ left: rightStart, top: 0, width: rightWidth, height: h })
-      .greyscale()
-      .normalise()
-      .toFile(tmpRight),
+      .greyscale().normalise().toFile(tmpRight),
+    sharp(tmpRaw)
+      .extract({ left: leftStart, top: attrTop, width: leftWidth, height: h - attrTop })
+      .greyscale().normalise().toFile(tmpLeftAttr),
+    sharp(tmpRaw)
+      .extract({ left: rightStart, top: attrTop, width: rightWidth, height: h - attrTop })
+      .greyscale().normalise().toFile(tmpRightAttr),
   ]);
 
   const textWorker   = await createWorker('eng');
@@ -124,8 +128,8 @@ export async function performOCR(imageUrl) {
       textWorker.recognize(tmpName),
       textWorker.recognize(tmpLeft),
       textWorker.recognize(tmpRight),
-      digitsWorker.recognize(tmpLeft),
-      digitsWorker.recognize(tmpRight),
+      digitsWorker.recognize(tmpLeftAttr),
+      digitsWorker.recognize(tmpRightAttr),
     ]);
 
     // Parse name: take only lines that are all caps letters, pick the two longest
@@ -218,10 +222,12 @@ export async function performOCR(imageUrl) {
   } finally {
     await textWorker.terminate();
     await digitsWorker.terminate();
-    try { unlinkSync(tmpRaw);   } catch {}
-    try { unlinkSync(tmpName);  } catch {}
-    try { unlinkSync(tmpLeft);  } catch {}
-    try { unlinkSync(tmpRight); } catch {}
+    try { unlinkSync(tmpRaw);       } catch {}
+    try { unlinkSync(tmpName);      } catch {}
+    try { unlinkSync(tmpLeft);      } catch {}
+    try { unlinkSync(tmpRight);     } catch {}
+    try { unlinkSync(tmpLeftAttr);  } catch {}
+    try { unlinkSync(tmpRightAttr); } catch {}
   }
 }
 
