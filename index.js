@@ -47,6 +47,19 @@ const commands = [
     .setName('clear-recruit')
     .setDescription('Delete a saved recruit by ID')
     .addIntegerOption(o => o.setName('id').setDescription('Recruit ID').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('todo-add')
+    .setDescription('Add a task to your to-do list')
+    .addStringOption(o => o.setName('league').setDescription('League name').setRequired(true))
+    .addStringOption(o => o.setName('task').setDescription('Task description').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('todo-list')
+    .setDescription('View your to-do list')
+    .addStringOption(o => o.setName('league').setDescription('Filter by league (optional)').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('todo-reset')
+    .setDescription('Uncheck all tasks for a league')
+    .addStringOption(o => o.setName('league').setDescription('League name').setRequired(true)),
 ].map(c => c.toJSON());
 
 async function start() {
