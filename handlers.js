@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } from 'discord.js';
 import { supabase } from './supabase.js';
 import { performOCR, parseAttributes } from './utils/ocr.js';
 import {
@@ -124,8 +124,8 @@ export async function handleCommand(interaction) {
       .insert({ user_id: interaction.user.id, league, task, done: false })
       .select()
       .single();
-    if (error) return interaction.reply({ content: 'Failed to add task. Try again.', ephemeral: true });
-    return interaction.reply({ content: `✅ Added task **#${data.id}** to **${league}**:\n> ${task}`, ephemeral: true });
+    if (error) return interaction.reply({ content: 'Failed to add task. Try again.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `✅ Added task **#${data.id}** to **${league}**:\n> ${task}`, flags: MessageFlags.Ephemeral });
   }
 
   // /todo-list
@@ -134,8 +134,8 @@ export async function handleCommand(interaction) {
     let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
     if (league) query = query.ilike('league', league.trim());
     const { data, error } = await query;
-    if (error) return interaction.reply({ content: 'Failed to fetch tasks.', ephemeral: true });
-    if (!data.length) return interaction.reply({ content: league ? `No tasks found for **${league}**.` : 'No tasks found.', ephemeral: true });
+    if (error) return interaction.reply({ content: 'Failed to fetch tasks.', flags: MessageFlags.Ephemeral });
+    if (!data.length) return interaction.reply({ content: league ? `No tasks found for **${league}**.` : 'No tasks found.', flags: MessageFlags.Ephemeral });
 
     // Group by league
     const grouped = {};
@@ -190,7 +190,7 @@ export async function handleCommand(interaction) {
     }
     if (btnCount > 0) components.push(row);
 
-    return interaction.reply({ embeds: [embed], components, ephemeral: true });
+    return interaction.reply({ embeds: [embed], components, flags: MessageFlags.Ephemeral });
   }
 
   // /todo-reset
@@ -198,8 +198,8 @@ export async function handleCommand(interaction) {
     const league = interaction.options.getString('league').trim();
     const { error } = await supabase
       .from('todos').update({ done: false }).eq('user_id', interaction.user.id).ilike('league', league);
-    if (error) return interaction.reply({ content: 'Failed to reset tasks.', ephemeral: true });
-    return interaction.reply({ content: `⬜ All tasks in **${league}** have been unchecked.`, ephemeral: true });
+    if (error) return interaction.reply({ content: 'Failed to reset tasks.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `⬜ All tasks in **${league}** have been unchecked.`, flags: MessageFlags.Ephemeral });
   }
 
 
@@ -284,7 +284,7 @@ export async function handleButton(interaction) {
     const taskId = parseInt(id.replace('todo_toggle_', ''));
     const { data: task, error: fetchErr } = await supabase
       .from('todos').select('*').eq('id', taskId).eq('user_id', interaction.user.id).single();
-    if (fetchErr || !task) return interaction.reply({ content: 'Task not found.', ephemeral: true });
+    if (fetchErr || !task) return interaction.reply({ content: 'Task not found.', flags: MessageFlags.Ephemeral });
     await supabase.from('todos').update({ done: !task.done }).eq('id', taskId);
     await refreshTodoMessage(interaction);
     return;
