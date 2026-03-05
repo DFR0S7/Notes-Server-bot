@@ -335,8 +335,7 @@ export async function handleButton(interaction) {
     let ocrText, recruitName = null;
     try {
       const ocrResult = await performOCR(session.attachmentUrl);
-      ocrText     = ocrResult.text;
-      recruitName = ocrResult.name;
+      ocrText = ocrResult.text;
     } catch (err) {
       console.error('OCR failed:', err);
       activeEdits.delete(interaction.user.id);
@@ -364,23 +363,12 @@ export async function handleButton(interaction) {
       ? '\n⚠️ Only **' + foundCount + '/10** attributes found. Missing: **' + (missing.length ? missing.join(', ') : 'unknown') + '**. Use Edit Labels to fix.'
       : '';
 
-    if (recruitName) {
-      // Name found via OCR — skip naming prompt, go straight to confirm
-      activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
-      await interaction.editReply({
-        content: 'Found **' + foundCount + '/10** attributes for **' + recruitName + '** (' + position + ' ' + archetype + ').' + warning,
-        embeds: [createAnalysisEmbed(recruit)],
-        components: [getConfirmRow(recruit.id)],
-      });
-    } else {
-      // Name not found — ask user
-      activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
-      await interaction.editReply({
-        content: 'Found **' + foundCount + '/10** attributes for **' + position + ' ' + archetype + '**.' + warning + '\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
-        embeds: [createAnalysisEmbed(recruit)],
-        components: [],
-      });
-    }
+    activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
+    await interaction.editReply({
+      content: 'Found **' + foundCount + '/10** attributes for **' + position + ' ' + archetype + '**.' + warning + '\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [],
+    });
   }
 
   // config_pos_{POSITION}
