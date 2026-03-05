@@ -153,10 +153,9 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
 
     const foundNames = targetNames.filter(name => {
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const pattern = name === 'TACKLE'
-        ? /(?<!BREAK )TACKLE/.test(line)
-        : new RegExp('(?<![A-Z])' + escaped + '(?![A-Z])').test(line);
-      return pattern;
+      return name === 'TACKLE'
+        ? line.includes('BREAK TACKLE') ? false : line.includes('TACKLE')
+        : new RegExp('\\b' + escaped + '\\b').test(line);
     });
     if (foundNames.length === 0) continue;
 
