@@ -159,7 +159,7 @@ export async function handleCommand(interaction) {
 
   // /todo-edit - interactive embed with buttons
   if (commandName === 'todo-edit') {
-    const league = interaction.options.getString('league');
+    const league = interaction.options.getString('league') || '';
     let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
     if (league) query = query.ilike('league', league.trim());
     const { data, error } = await query;
@@ -172,7 +172,7 @@ export async function handleCommand(interaction) {
       grouped[row.league].push(row);
     }
 
-    const { embed, components } = buildTodoEmbed(grouped);
+    const { embed, components } = buildTodoEmbed(grouped, league);
     return interaction.reply({ embeds: [embed], components, flags: MessageFlags.Ephemeral });
   }
 
@@ -209,7 +209,7 @@ export async function handleCommand(interaction) {
 }
 
 // ── Todo Helpers ──────────────────────────────────────────────────────────────
-function buildTodoEmbed(grouped) {
+function buildTodoEmbed(grouped, filter = '') {
   const embed = new EmbedBuilder()
     .setTitle('📋 To-Do List')
     .setColor(0x5865f2)
@@ -224,13 +224,14 @@ function buildTodoEmbed(grouped) {
   const components = [];
   let row = new ActionRowBuilder();
   let btnCount = 0;
+  const f = filter ? '|' + filter : '';
 
   for (const [lg, tasks] of Object.entries(grouped)) {
     for (const t of tasks) {
       if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
       row.addComponents(
         new ButtonBuilder()
-          .setCustomId('todo_toggle_' + t.id)
+          .setCustomId('todo_toggle_' + t.id + f)
           .setLabel((t.done ? '☑️ ' : '⬜ ') + t.task.slice(0, 30))
           .setStyle(t.done ? ButtonStyle.Secondary : ButtonStyle.Primary)
       );
@@ -239,7 +240,7 @@ function buildTodoEmbed(grouped) {
     if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
     row.addComponents(
       new ButtonBuilder()
-        .setCustomId('todo_reset_' + lg)
+        .setCustomId('todo_reset_' + lg + f)
         .setLabel('↺ Reset ' + lg)
         .setStyle(ButtonStyle.Danger)
     );
@@ -250,9 +251,10 @@ function buildTodoEmbed(grouped) {
   return { embed, components };
 }
 
-async function refreshTodoMessage(interaction) {
-  const { data } = await supabase
-    .from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
+async function refreshTodoMessage(interaction, filter = '') {
+  let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
+  if (filter) query = query.ilike('league', filter);
+  const { data } = await query;
 
   const grouped = {};
   for (const row of data || []) {
@@ -260,7 +262,7 @@ async function refreshTodoMessage(interaction) {
     grouped[row.league].push(row);
   }
 
-  const { embed, components } = buildTodoEmbed(grouped);
+  const { embed, components } = buildTodoEmbed(grouped, filter);
   await interaction.update({ embeds: [embed], components });
 }
 
@@ -268,22 +270,27 @@ async function refreshTodoMessage(interaction) {
 export async function handleButton(interaction) {
   const id = interaction.customId;
 
-  // todo_toggle_{id}
+  // todo_toggle_{id} or todo_toggle_{id}|{filter}
   if (id.startsWith('todo_toggle_')) {
-    const taskId = parseInt(id.replace('todo_toggle_', ''));
+    const rest   = id.replace('todo_toggle_', '');
+    const [taskIdStr, filter = ''] = rest.split('|');
+    const taskId = parseInt(taskIdStr);
     const { data: task, error: fetchErr } = await supabase
       .from('todos').select('*').eq('id', taskId).eq('user_id', interaction.user.id).single();
     if (fetchErr || !task) return interaction.reply({ content: 'Task not found.', flags: MessageFlags.Ephemeral });
     await supabase.from('todos').update({ done: !task.done }).eq('id', taskId);
-    await refreshTodoMessage(interaction);
+    await refreshTodoMessage(interaction, filter);
     return;
   }
 
-  // todo_reset_{league}
+  // todo_reset_{league} or todo_reset_{league}|{filter}
   if (id.startsWith('todo_reset_')) {
-    const league = id.replace('todo_reset_', '');
+    const rest   = id.replace('todo_reset_', '');
+    const pipeIdx = rest.indexOf('|');
+    const league = pipeIdx === -1 ? rest : rest.slice(0, pipeIdx);
+    const filter = pipeIdx === -1 ? '' : rest.slice(pipeIdx + 1);
     await supabase.from('todos').update({ done: false }).eq('user_id', interaction.user.id).eq('league', league);
-    await refreshTodoMessage(interaction);
+    await refreshTodoMessage(interaction, filter);
     return;
   }
 
