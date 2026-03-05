@@ -92,14 +92,9 @@ export async function performOCR(imageUrl) {
     .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
     .greyscale()
     .normalise()
-    .resize({ width: boxWidth * 2, kernel: 'cubic' })
     .toFile(tmpBox);
 
   const worker = await createWorker('eng');
-  await worker.setParameters({
-    tessedit_pageseg_mode: '6',
-    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
-  });
   try {
     const result = await worker.recognize(tmpBox);
     const text = result.data.text;
