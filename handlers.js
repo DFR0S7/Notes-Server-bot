@@ -297,7 +297,7 @@ export async function handleButton(interaction) {
     activeEdits.set(interaction.user.id, { ...session, position });
     await interaction.update({
       content: 'Position: **' + position + '**\nStep 2: Select an archetype',
-      components: getArchetypeRows('analyze', position),
+      components: await getArchetypeRows('analyze', position),
     });
   }
 
@@ -388,7 +388,7 @@ export async function handleButton(interaction) {
     const position = id.replace('config_pos_', '');
     await interaction.update({
       content: 'Position: **' + position + '**\nStep 2: Select an archetype',
-      components: getArchetypeRows('config', position),
+      components: await getArchetypeRows('config', position),
     });
   }
 
@@ -423,7 +423,7 @@ export async function handleButton(interaction) {
     const position = id.replace('view_pos_', '');
     await interaction.update({
       content: 'Position: **' + position + '**\nStep 2: Select an archetype',
-      components: getArchetypeRows('view', position),
+      components: await getArchetypeRows('view', position),
     });
   }
 
