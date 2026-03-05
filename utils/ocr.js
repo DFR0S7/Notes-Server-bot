@@ -81,10 +81,10 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Attribute columns
-  const leftStart  = Math.floor(w * 0.45);
-  const leftWidth  = Math.floor(w * 0.135);
-  const rightStart = Math.floor(w * 0.585);
+  // Split into left column (44-58%) and right column (58-72%) to OCR each cleanly
+  const leftStart  = Math.floor(w * 0.44);
+  const leftWidth  = Math.floor(w * 0.155);
+  const rightStart = Math.floor(w * 0.595);
   const rightWidth = Math.floor(w * 0.135);
 
   // Name region
