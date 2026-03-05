@@ -81,11 +81,11 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Split into left column (44-58%) and right column (58-72%) to OCR each cleanly
+  // Split into left column (44-57%) and right column (60.5-73%) to OCR each cleanly
   const leftStart  = Math.floor(w * 0.44);
-  const leftWidth  = Math.floor(w * 0.155);
-  const rightStart = Math.floor(w * 0.595);
-  const rightWidth = Math.floor(w * 0.135);
+  const leftWidth  = Math.floor(w * 0.13);
+  const rightStart = Math.floor(w * 0.605);
+  const rightWidth = Math.floor(w * 0.125);
 
   // Name region
   const nameStart = Math.floor(w * 0.44);
@@ -194,16 +194,22 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     if (foundNames.length === 0) continue;
 
     // Try next line for numbers, fall back to inline numbers
-    // Also correct known OCR misreads: Eb/eb=91, lg/Ig=78, single 8 at end=84
-    const rawNext    = (lines[i + 1] || '').trim();
-    const corrected  = rawNext
+    // Correct known OCR misreads across different team color schemes
+    const rawNext   = (lines[i + 1] || '').trim();
+    const corrected = rawNext
       .replace(/\bEb\b/gi, '91')
       .replace(/\beb\s+et\b/gi, '91')
+      .replace(/\boT\b/gi, '91')
       .replace(/\blg\b/gi, '78')
       .replace(/\bIg\b/gi, '78')
-      .replace(/^8$/, '84');
+      .replace(/^8$/, '84')
+      .replace(/\bBY\b/gi, '81')
+      .replace(/\bELLE\b/gi, '74')
+      .replace(/(\d{2})0$/, '$1')
+      .replace(/(\d{2})[°.:]+$/, '$1')
+      .replace(/^[^0-9]*(\d{2,3})[^0-9]*$/, '$1');
     const nextNums   = corrected.match(/\b\d{2,3}\b/g);
-    const inlineNums = lines[i].match(/\b\d{2,3}\b/g);
+    const inlineNums = lines[i].replace(/(\d{2})0\b/, '$1').match(/\b\d{2,3}\b/g);
     const numbers    = (nextNums && nextNums.length > 0) ? nextNums : inlineNums;
     if (!numbers) continue;
 
