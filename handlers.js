@@ -115,7 +115,94 @@ export async function handleCommand(interaction) {
     await interaction.reply({ embeds: [createRecruitDetailEmbed(data)], flags: 64 });
   }
 
-  // /clear-recruit
+  // /todo-add
+  if (commandName === 'todo-add') {
+    const league = interaction.options.getString('league').trim();
+    const task   = interaction.options.getString('task').trim();
+    const { data, error } = await supabase
+      .from('todos')
+      .insert({ user_id: interaction.user.id, league, task, done: false })
+      .select()
+      .single();
+    if (error) return interaction.reply({ content: 'Failed to add task. Try again.', ephemeral: true });
+    return interaction.reply({ content: `✅ Added task **#${data.id}** to **${league}**:\n> ${task}`, ephemeral: true });
+  }
+
+  // /todo-list
+  if (commandName === 'todo-list') {
+    const league = interaction.options.getString('league');
+    let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
+    if (league) query = query.ilike('league', league.trim());
+    const { data, error } = await query;
+    if (error) return interaction.reply({ content: 'Failed to fetch tasks.', ephemeral: true });
+    if (!data.length) return interaction.reply({ content: league ? `No tasks found for **${league}**.` : 'No tasks found.', ephemeral: true });
+
+    // Group by league
+    const grouped = {};
+    for (const row of data) {
+      if (!grouped[row.league]) grouped[row.league] = [];
+      grouped[row.league].push(row);
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('📋 To-Do List')
+      .setColor(0x5865f2)
+      .setTimestamp();
+
+    for (const [lg, tasks] of Object.entries(grouped)) {
+      const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ' ' + t.task).join('\n');
+      embed.addFields({ name: lg, value: lines });
+    }
+
+    // Build button rows - one button per task, plus a reset button per league
+    const components = [];
+    let row = new ActionRowBuilder();
+    let btnCount = 0;
+
+    for (const [lg, tasks] of Object.entries(grouped)) {
+      for (const t of tasks) {
+        if (btnCount === 5) {
+          components.push(row);
+          row = new ActionRowBuilder();
+          btnCount = 0;
+        }
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId('todo_toggle_' + t.id)
+            .setLabel((t.done ? '☑️ ' : '⬜ ') + t.task.slice(0, 30))
+            .setStyle(t.done ? ButtonStyle.Secondary : ButtonStyle.Primary)
+        );
+        btnCount++;
+      }
+      // Reset button for this league
+      if (btnCount === 5) {
+        components.push(row);
+        row = new ActionRowBuilder();
+        btnCount = 0;
+      }
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId('todo_reset_' + lg)
+          .setLabel('↺ Reset ' + lg)
+          .setStyle(ButtonStyle.Danger)
+      );
+      btnCount++;
+    }
+    if (btnCount > 0) components.push(row);
+
+    return interaction.reply({ embeds: [embed], components, ephemeral: true });
+  }
+
+  // /todo-reset
+  if (commandName === 'todo-reset') {
+    const league = interaction.options.getString('league').trim();
+    const { error } = await supabase
+      .from('todos').update({ done: false }).eq('user_id', interaction.user.id).ilike('league', league);
+    if (error) return interaction.reply({ content: 'Failed to reset tasks.', ephemeral: true });
+    return interaction.reply({ content: `⬜ All tasks in **${league}** have been unchecked.`, ephemeral: true });
+  }
+
+
   if (commandName === 'clear-recruit') {
     const id = interaction.options.getInteger('id');
     const { data } = await supabase
@@ -138,11 +225,80 @@ export async function handleCommand(interaction) {
   }
 }
 
+// ── Todo Refresh Helper ───────────────────────────────────────────────────────
+async function refreshTodoMessage(interaction) {
+  const { data } = await supabase
+    .from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
+
+  const grouped = {};
+  for (const row of data || []) {
+    if (!grouped[row.league]) grouped[row.league] = [];
+    grouped[row.league].push(row);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle('📋 To-Do List')
+    .setColor(0x5865f2)
+    .setTimestamp();
+
+  for (const [lg, tasks] of Object.entries(grouped)) {
+    const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ' ' + t.task).join('\n');
+    embed.addFields({ name: lg, value: lines });
+  }
+
+  const components = [];
+  let row = new ActionRowBuilder();
+  let btnCount = 0;
+
+  for (const [lg, tasks] of Object.entries(grouped)) {
+    for (const t of tasks) {
+      if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId('todo_toggle_' + t.id)
+          .setLabel((t.done ? '☑️ ' : '⬜ ') + t.task.slice(0, 30))
+          .setStyle(t.done ? ButtonStyle.Secondary : ButtonStyle.Primary)
+      );
+      btnCount++;
+    }
+    if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('todo_reset_' + lg)
+        .setLabel('↺ Reset ' + lg)
+        .setStyle(ButtonStyle.Danger)
+    );
+    btnCount++;
+  }
+  if (btnCount > 0) components.push(row);
+
+  await interaction.update({ embeds: [embed], components });
+}
+
 // ── Button Handler ────────────────────────────────────────────────────────────
 export async function handleButton(interaction) {
   const id = interaction.customId;
 
-  // analyze_pos_{POSITION}
+  // todo_toggle_{id}
+  if (id.startsWith('todo_toggle_')) {
+    const taskId = parseInt(id.replace('todo_toggle_', ''));
+    const { data: task, error: fetchErr } = await supabase
+      .from('todos').select('*').eq('id', taskId).eq('user_id', interaction.user.id).single();
+    if (fetchErr || !task) return interaction.reply({ content: 'Task not found.', ephemeral: true });
+    await supabase.from('todos').update({ done: !task.done }).eq('id', taskId);
+    await refreshTodoMessage(interaction);
+    return;
+  }
+
+  // todo_reset_{league}
+  if (id.startsWith('todo_reset_')) {
+    const league = id.replace('todo_reset_', '');
+    await supabase.from('todos').update({ done: false }).eq('user_id', interaction.user.id).eq('league', league);
+    await refreshTodoMessage(interaction);
+    return;
+  }
+
+
   if (id.startsWith('analyze_pos_')) {
     const position = id.replace('analyze_pos_', '');
     const session  = activeEdits.get(interaction.user.id);
