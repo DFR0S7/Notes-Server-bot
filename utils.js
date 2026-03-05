@@ -136,10 +136,10 @@ export function createBreakdownEmbed(recruit, score, breakdown, warning = null) 
         return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
       })
     : breakdown;
-  const lines = sorted.map(b =>
+  const lines = sorted.map(b => {
     const icon = b.pass ? '✅' : b.above ? '🔺' : '❌';
     return icon + ' **' + b.attr + '**: ' + b.value + ' _(range: ' + b.min + '-' + b.max + ')_';
-  ).join('\n') || 'No data';
+  }).join('\n') || 'No data';
 
   const title = recruit?.name
     ? icon + ' ' + recruit.name + ' — Fit Score: ' + score + '%'
