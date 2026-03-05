@@ -73,6 +73,7 @@ const ABBREV_TO_OCR = Object.fromEntries(
 
 export async function performOCR(imageUrl) {
   const tmpRaw = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
+  const tmpBox = join(tmpdir(), 'recruit_box_' + Date.now() + '.png');
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
@@ -81,34 +82,28 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Split into left column (44-57%) and right column (60.5-73%)
-  const leftStart  = Math.floor(w * 0.44);
-  const leftWidth  = Math.floor(w * 0.13);
-  const rightStart = Math.floor(w * 0.605);
-  const rightWidth = Math.floor(w * 0.125);
+  // Crop to just the attributes box (x: 47-73%, y: 33-88%)
+  const boxLeft   = Math.floor(w * 0.47);
+  const boxTop    = Math.floor(h * 0.33);
+  const boxWidth  = Math.floor(w * 0.26);
+  const boxHeight = Math.floor(h * 0.55);
 
-  const tmpLeft  = join(tmpdir(), 'recruit_left_'  + Date.now() + '.png');
-  const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
-
-  await Promise.all([
-    sharp(tmpRaw).extract({ left: leftStart,  top: 0, width: leftWidth,  height: h }).greyscale().normalise().toFile(tmpLeft),
-    sharp(tmpRaw).extract({ left: rightStart, top: 0, width: rightWidth, height: h }).greyscale().normalise().toFile(tmpRight),
-  ]);
+  await sharp(tmpRaw)
+    .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
+    .greyscale()
+    .normalise()
+    .toFile(tmpBox);
 
   const worker = await createWorker('eng');
   try {
-    const [leftResult, rightResult] = await Promise.all([
-      worker.recognize(tmpLeft),
-      worker.recognize(tmpRight),
-    ]);
-    const combined = leftResult.data.text + '\n' + rightResult.data.text;
-    console.log('OCR raw output:\n', combined);
-    return { text: combined };
+    const result = await worker.recognize(tmpBox);
+    const text = result.data.text;
+    console.log('OCR raw output:\n', text);
+    return { text };
   } finally {
     await worker.terminate();
-    try { unlinkSync(tmpRaw);   } catch {}
-    try { unlinkSync(tmpLeft);  } catch {}
-    try { unlinkSync(tmpRight); } catch {}
+    try { unlinkSync(tmpRaw); } catch {}
+    try { unlinkSync(tmpBox); } catch {}
   }
 }
 
@@ -177,10 +172,14 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       .replace(/^8$/, '84')
       .replace(/\bBY\b/gi, '81')
       .replace(/\bELLE\b/gi, '74')
-      .replace(/\bB(\d{2})\b/, '$1')   // B20 -> 20... but B82 -> 82
-      .replace(/^[A-Za-z]+(\d{2,3})$/, '$1')  // leading letters: B20->20, ED79->79
-      .replace(/^(\d{2,3})[^0-9].*$/, '$1')   // trailing junk: "80 |" -> "80"
-      .replace(/(\d{2})[°.:]+$/, '$1');        // trailing punctuation
+      .replace(/\bBOR\b/gi, '70')
+      .replace(/\bSerle\b/gi, '70')
+      .replace(/\b[Ll]h\b/gi, '74')
+      .replace(/\b\[are\b/gi, '79')
+      .replace(/^[A-Za-z]+(\d{2,3})$/, '$1')   // leading letters: ED79->79
+      .replace(/^(\d{2})\d+/, '$1')             // extra digits: 921->92, 9358->93
+      .replace(/^(\d{2,3})[^0-9].*$/, '$1')    // trailing junk: "80 |" -> "80"
+      .replace(/(\d{2})[°.:]+$/, '$1');         // trailing punctuation
     const nextNums   = corrected.match(/\b\d{2,3}\b/g);
     const cleanCurrent = lines[i].replace(/(\d{2,3})[°.:]+/, '$1');
     const inlineNums = cleanCurrent.match(/\b\d{2,3}\b/g);
