@@ -115,6 +115,9 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     ? configuredAttrs.map(a => ABBREV_TO_OCR[a]).filter(Boolean)
     : ALL_NAMES).sort((a, b) => b.length - a.length);
 
+  console.log('configuredAttrs:', configuredAttrs);
+  console.log('targetNames:', targetNames);
+
   for (let i = 0; i < lines.length; i++) {
     const raw  = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
     const line = raw
