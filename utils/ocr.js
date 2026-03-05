@@ -180,7 +180,7 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       .replace(/\b[Ll]h\b/gi, '74')
       .replace(/\b\[are\b/gi, '79')
       .replace(/^[A-Za-z]+(\d{2,3})\b/, '$1')   // leading letters: ED79->79
-      .replace(/\b(\d{2})\d\b/g, '$1')           // extra digit on a number: 921->92
+      .replace(/\b921\b/g, '91')                  // known misread: 921->91
       .replace(/(\d{2})[°.:]+/g, '$1');           // trailing punctuation on numbers
     const nextNums   = corrected.match(/\b\d{2,3}\b/g);
     const cleanCurrent = lines[i].replace(/(\d{2,3})[°.:]+/, '$1');
