@@ -81,61 +81,33 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Split into left column (44-57%) and right column (60.5-73%) to OCR each cleanly
+  // Split into left column (44-57%) and right column (60.5-73%)
   const leftStart  = Math.floor(w * 0.44);
   const leftWidth  = Math.floor(w * 0.13);
   const rightStart = Math.floor(w * 0.605);
   const rightWidth = Math.floor(w * 0.125);
 
-  // Name region
-  const nameStart = Math.floor(w * 0.44);
-  const nameWidth = Math.floor(w * 0.18);
-  const nameY1    = Math.floor(h * 0.166);
-  const nameY2    = Math.floor(h * 0.268);
-
-  const tmpName  = join(tmpdir(), 'recruit_name_'  + Date.now() + '.png');
   const tmpLeft  = join(tmpdir(), 'recruit_left_'  + Date.now() + '.png');
   const tmpRight = join(tmpdir(), 'recruit_right_' + Date.now() + '.png');
 
   await Promise.all([
-    sharp(tmpRaw)
-      .extract({ left: nameStart, top: nameY1, width: nameWidth, height: nameY2 - nameY1 })
-      .greyscale().normalise().toFile(tmpName),
-    sharp(tmpRaw)
-      .extract({ left: leftStart, top: 0, width: leftWidth, height: h })
-      .greyscale().normalise().toFile(tmpLeft),
-    sharp(tmpRaw)
-      .extract({ left: rightStart, top: 0, width: rightWidth, height: h })
-      .greyscale().normalise().toFile(tmpRight),
+    sharp(tmpRaw).extract({ left: leftStart,  top: 0, width: leftWidth,  height: h }).greyscale().normalise().toFile(tmpLeft),
+    sharp(tmpRaw).extract({ left: rightStart, top: 0, width: rightWidth, height: h }).greyscale().normalise().toFile(tmpRight),
   ]);
 
   const worker = await createWorker('eng');
   try {
-    const [nameResult, leftResult, rightResult] = await Promise.all([
-      worker.recognize(tmpName),
+    const [leftResult, rightResult] = await Promise.all([
       worker.recognize(tmpLeft),
       worker.recognize(tmpRight),
     ]);
-
-    // Name: lines that are pure uppercase letters, pick two longest
-    const nameLines = nameResult.data.text
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => /^[A-Z]{2,}$/.test(l))
-      .sort((a, b) => b.length - a.length)
-      .slice(0, 2)
-      .reverse();
-    const recruitName = nameLines.join(' ') || null;
-
     const combined = leftResult.data.text + '\n' + rightResult.data.text;
-    console.log('OCR name:', recruitName);
     console.log('OCR raw output:\n', combined);
-    return { text: combined, name: recruitName };
+    return { text: combined };
   } finally {
     await worker.terminate();
-    try { unlinkSync(tmpRaw);  } catch {}
-    try { unlinkSync(tmpName); } catch {}
-    try { unlinkSync(tmpLeft); } catch {}
+    try { unlinkSync(tmpRaw);   } catch {}
+    try { unlinkSync(tmpLeft);  } catch {}
     try { unlinkSync(tmpRight); } catch {}
   }
 }
@@ -205,12 +177,19 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       .replace(/^8$/, '84')
       .replace(/\bBY\b/gi, '81')
       .replace(/\bELLE\b/gi, '74')
-      .replace(/(\d{2})0$/, '$1')
-      .replace(/(\d{2})[°.:]+$/, '$1')
-      .replace(/^[^0-9]*(\d{2,3})[^0-9]*$/, '$1');
+      .replace(/\bB(\d{2})\b/, '$1')   // B20 -> 20... but B82 -> 82
+      .replace(/^[A-Za-z]+(\d{2,3})$/, '$1')  // leading letters: B20->20, ED79->79
+      .replace(/^(\d{2,3})[^0-9].*$/, '$1')   // trailing junk: "80 |" -> "80"
+      .replace(/(\d{2})[°.:]+$/, '$1');        // trailing punctuation
     const nextNums   = corrected.match(/\b\d{2,3}\b/g);
-    const inlineNums = lines[i].replace(/(\d{2})0\b/, '$1').match(/\b\d{2,3}\b/g);
-    const numbers    = (nextNums && nextNums.length > 0) ? nextNums : inlineNums;
+    const cleanCurrent = lines[i].replace(/(\d{2,3})[°.:]+/, '$1');
+    const inlineNums = cleanCurrent.match(/\b\d{2,3}\b/g);
+    // If next line gave no valid numbers, peek two lines ahead
+    const nextLine2  = (lines[i + 2] || '').trim().replace(/^[A-Za-z]+(\d{2,3})$/, '$1').replace(/^(\d{2,3})[^0-9].*$/, '$1');
+    const peekNums   = nextLine2.match(/\b\d{2,3}\b/g);
+    const numbers    = (nextNums && nextNums.length > 0) ? nextNums
+                     : (inlineNums && inlineNums.length > 0) ? inlineNums
+                     : peekNums;
     if (!numbers) continue;
 
     const sortedNames = foundNames
