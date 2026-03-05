@@ -82,11 +82,11 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Crop to just the attributes box (x: 47-73%, y: 33-88%)
-  const boxLeft   = Math.floor(w * 0.47);
-  const boxTop    = Math.floor(h * 0.33);
-  const boxWidth  = Math.floor(w * 0.26);
-  const boxHeight = Math.floor(h * 0.55);
+  // Crop to just the attributes box (x: 49-72%, y: 36-88%)
+  const boxLeft   = Math.floor(w * 0.49);
+  const boxTop    = Math.floor(h * 0.36);
+  const boxWidth  = Math.floor(w * 0.23);
+  const boxHeight = Math.floor(h * 0.52);
 
   await sharp(tmpRaw)
     .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
@@ -161,6 +161,7 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
         : new RegExp('\\b' + escaped + '\\b').test(line);
     });
     if (foundNames.length === 0) continue;
+    console.log('foundNames:', foundNames, '| nextLine:', (lines[i+1]||'').trim());
 
     // Try next line for numbers, fall back to inline numbers
     // Correct known OCR misreads across different team color schemes
