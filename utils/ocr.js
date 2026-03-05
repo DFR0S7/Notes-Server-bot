@@ -82,10 +82,10 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Crop to just the attributes box (x: 45-80%, y: 40-78%)
+  // Crop to just the attributes box (x: 45-72%, y: 40-78%)
   const boxLeft   = Math.floor(w * 0.45);
   const boxTop    = Math.floor(h * 0.40);
-  const boxWidth  = Math.floor(w * 0.35);
+  const boxWidth  = Math.floor(w * 0.27);
   const boxHeight = Math.floor(h * 0.38);
 
   await sharp(tmpRaw)
