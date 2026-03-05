@@ -84,8 +84,16 @@ export function getPositionRows(commandType) {
   return toRows(POSITIONS, commandType + '_pos_');
 }
 
-export function getArchetypeRows(commandType, position) {
-  return toRows(ARCHETYPES[position] ?? [], commandType + '_arch_' + position + '_');
+export async function getArchetypeRows(commandType, position) {
+  let archetypes = ARCHETYPES[position] ?? [];
+  if (archetypes.length === 0) {
+    const { data } = await supabase
+      .from('archetypes')
+      .select('archetype')
+      .eq('position', position.toUpperCase());
+    archetypes = (data || []).map(r => r.archetype);
+  }
+  return toRows(archetypes, commandType + '_arch_' + position + '_');
 }
 
 export function getConfirmRow(recruitId) {
