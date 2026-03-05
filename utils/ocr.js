@@ -92,9 +92,14 @@ export async function performOCR(imageUrl) {
     .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
     .greyscale()
     .normalise()
+    .resize({ width: boxWidth * 2, kernel: 'cubic' })
     .toFile(tmpBox);
 
   const worker = await createWorker('eng');
+  await worker.setParameters({
+    tessedit_pageseg_mode: '6',
+    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
+  });
   try {
     const result = await worker.recognize(tmpBox);
     const text = result.data.text;
@@ -126,8 +131,7 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       .replace(/MIDACCURACY/g, 'MID ACCURACY')
       .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
       .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
-      .replace(/THROWONRUN/g, 'THROW ON RUN')
-      .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
+      .replace(/THROWONRUN/g, 'THROW ON RUN')      .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
       .replace(/PLAYACTION/g, 'PLAY ACTION')
       .replace(/BREAKSACK/g, 'BREAK SACK')
       .replace(/CATCHINTRAFFIC/g, 'CATCH IN TRAFFIC')
@@ -181,6 +185,12 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       .replace(/\b\[are\b/gi, '79')
       .replace(/^[A-Za-z]+(\d{2,3})\b/, '$1')   // leading letters: ED79->79
       .replace(/\b921\b/g, '91')                  // known misread: 921->91
+      .replace(/\b929\b/g, '99')                  // known misread: 929->99
+      .replace(/\b924\b/g, '94')                  // known misread: 924->94
+      .replace(/\b(\d)\d(\d)\b/g, (m, a, b) => {  // 3-digit where first+last make sense: 929->99, 818->81
+        const twoDigit = parseInt(a + b);
+        return (twoDigit >= 40 && twoDigit <= 99) ? String(twoDigit) : m;
+      })
       .replace(/(\d{2})[°.:]+/g, '$1');           // trailing punctuation on numbers
     const nextNums   = corrected.match(/\b\d{2,3}\b/g);
     const cleanCurrent = lines[i].replace(/(\d{2,3})[°.:]+/, '$1');
