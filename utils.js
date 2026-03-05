@@ -56,8 +56,11 @@ export function getAttributeOrder(position, archetype) {
       if (archetype === 'Gritty Possession')                                     return WR_GRITTY;
       return WR_DEFAULT;
     case 'ATH':
-      if (archetype === 'Thumper') return LB_ORDER;
-      return TE_DEFAULT;
+      if (archetype === 'Thumper' || archetype === 'Signal Caller') return LB_ORDER;
+      if (archetype === 'Power Rushers') return DE_ORDER;
+      if (archetype === 'Dual Threat')   return QB_ORDER;
+      // HB-style ATH archetypes
+      return HB_ORDER;
     default: return null;
   }
 }
