@@ -73,8 +73,9 @@ const ABBREV_TO_OCR = Object.fromEntries(
 
 export async function performOCR(imageUrl) {
   const tmpRaw  = join(tmpdir(), 'recruit_raw_'  + Date.now() + '.png');
-  const tmpBox  = join(tmpdir(), 'recruit_box_'  + Date.now() + '.png');
-  const tmpName = join(tmpdir(), 'recruit_name_' + Date.now() + '.png');
+  const tmpBox   = join(tmpdir(), 'recruit_box_'  + Date.now() + '.png');
+  const tmpName  = join(tmpdir(), 'recruit_name_' + Date.now() + '.png');
+  const tmpMeta  = join(tmpdir(), 'recruit_meta_' + Date.now() + '.png');
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
@@ -95,6 +96,12 @@ export async function performOCR(imageUrl) {
   const nameWidth  = Math.floor(w * 0.27);
   const nameHeight = Math.floor(h * 0.13);
 
+  // Crop 3: position/archetype region (x: 68-85%, y: 12-28%)
+  const metaLeft   = Math.floor(w * 0.68);
+  const metaTop    = Math.floor(h * 0.12);
+  const metaWidth  = Math.floor(w * 0.17);
+  const metaHeight = Math.floor(h * 0.16);
+
   await Promise.all([
     sharp(tmpRaw)
       .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
@@ -106,6 +113,11 @@ export async function performOCR(imageUrl) {
       .greyscale().normalise()
       .resize({ width: nameWidth * 2, kernel: 'cubic' })
       .toFile(tmpName),
+    sharp(tmpRaw)
+      .extract({ left: metaLeft, top: metaTop, width: metaWidth, height: metaHeight })
+      .greyscale().normalise()
+      .resize({ width: metaWidth * 2, kernel: 'cubic' })
+      .toFile(tmpMeta),
   ]);
 
   const worker = await createWorker('eng');
@@ -114,9 +126,10 @@ export async function performOCR(imageUrl) {
     tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
   });
   try {
-    const [attrResult, nameResult] = await Promise.all([
+    const [attrResult, nameResult, metaResult] = await Promise.all([
       worker.recognize(tmpBox),
       worker.recognize(tmpName),
+      worker.recognize(tmpMeta),
     ]);
 
     const text = attrResult.data.text;
@@ -131,12 +144,38 @@ export async function performOCR(imageUrl) {
       .join(' ') || null;
     console.log('OCR name:', recruitName);
 
-    return { text, name: recruitName };
+    // Extract position and archetype from meta region
+    // Pattern: line containing POSITION followed by line with "POS [Class]"
+    //          line containing ARCHETYPE followed by line with "Archetype Name | Hometown"
+    const metaLines = metaResult.data.text
+      .split('\n')
+      .map(l => l.replace(/[|]/g, '').trim())
+      .filter(l => l.length > 0);
+
+    let recruitPosition = null;
+    let recruitArchetype = null;
+
+    for (let i = 0; i < metaLines.length; i++) {
+      const upper = metaLines[i].toUpperCase();
+      if (upper.includes('POSITION') && metaLines[i + 1]) {
+        // Next line: "ATH High School" or "QB Transfer (SO)" — first token is position
+        recruitPosition = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
+      }
+      if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
+        // Next line: "East/West Playmaker | Stilwell, KS" or "Pocket Passer | Louisville, KY"
+        // Take everything before the first pipe or comma
+        recruitArchetype = metaLines[i + 1].split(/[|,]/)[0].trim();
+      }
+    }
+    console.log('OCR position:', recruitPosition, '| archetype:', recruitArchetype);
+
+    return { text, name: recruitName, position: recruitPosition, archetype: recruitArchetype };
   } finally {
     await worker.terminate();
     try { unlinkSync(tmpRaw);  } catch {}
     try { unlinkSync(tmpBox);  } catch {}
     try { unlinkSync(tmpName); } catch {}
+    try { unlinkSync(tmpMeta); } catch {}
   }
 }
 
