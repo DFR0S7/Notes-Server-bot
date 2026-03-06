@@ -102,21 +102,27 @@ export async function performOCR(imageUrl) {
   const metaWidth  = Math.floor(w * 0.17);
   const metaHeight = Math.floor(h * 0.16);
 
+  const nameValid = nameWidth >= 10 && nameHeight >= 10;
+  const metaValid = metaWidth >= 10 && metaHeight >= 10;
+
   const cropPromises = [
     sharp(tmpRaw)
       .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
       .greyscale().normalise()
       .resize({ width: boxWidth * 2, kernel: 'cubic' })
       .toFile(tmpBox),
-    sharp(tmpRaw)
-      .extract({ left: nameLeft, top: nameTop, width: nameWidth, height: nameHeight })
-      .greyscale().normalise()
-      .resize({ width: nameWidth * 2, kernel: 'cubic' })
-      .toFile(tmpName),
   ];
 
-  // Only crop meta if dimensions are large enough
-  const metaValid = metaWidth >= 10 && metaHeight >= 10;
+  if (nameValid) {
+    cropPromises.push(
+      sharp(tmpRaw)
+        .extract({ left: nameLeft, top: nameTop, width: nameWidth, height: nameHeight })
+        .greyscale().normalise()
+        .resize({ width: nameWidth * 2, kernel: 'cubic' })
+        .toFile(tmpName)
+    );
+  }
+
   if (metaValid) {
     cropPromises.push(
       sharp(tmpRaw)
@@ -137,21 +143,24 @@ export async function performOCR(imageUrl) {
   try {
     const [attrResult, nameResult, metaResult] = await Promise.all([
       worker.recognize(tmpBox),
-      worker.recognize(tmpName),
+      nameValid ? worker.recognize(tmpName) : Promise.resolve(null),
       metaValid ? worker.recognize(tmpMeta) : Promise.resolve(null),
     ]);
 
     const text = attrResult.data.text;
     console.log('OCR raw output:\n', text);
 
-    // Extract name: find lines that start with a capitalized word, take first word only
-    const nameLines = nameResult.data.text
-      .split('\n')
-      .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
-      .map(l => l.split(/\s+/)[0])
-      .filter(w => w && /^[A-Z][A-Za-z]{2,}$/.test(w) && !/^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|DE|DT|LB|CB|SS|FS)$/.test(w))
-      .slice(0, 2);
-    const recruitName = nameLines.length > 0 ? nameLines.join(' ') : null;
+    // Extract name
+    const SKIP_WORDS = /^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|DE|DT|LB|CB|SS|FS)$/;
+    const recruitName = nameResult
+      ? (nameResult.data.text
+          .split('\n')
+          .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
+          .map(l => l.split(/\s+/)[0])
+          .filter(w => w && /^[A-Z][A-Za-z]{2,}$/.test(w) && !SKIP_WORDS.test(w))
+          .slice(0, 2)
+          .join(' ') || null)
+      : null;
     console.log('OCR name:', recruitName);
 
     // Extract position and archetype from meta region
@@ -164,15 +173,25 @@ export async function performOCR(imageUrl) {
         .map(l => l.replace(/[|]/g, '').trim())
         .filter(l => l.length > 0);
 
+      // Fetch all known archetypes from DB for fuzzy matching
+      const { data: allArchetypes } = await supabase.from('archetypes').select('position, archetype');
+      const knownArchetypes = allArchetypes?.map(a => a.archetype) || [];
+
       for (let i = 0; i < metaLines.length; i++) {
         const upper = metaLines[i].toUpperCase();
         if (upper.includes('POSITION') && metaLines[i + 1]) {
           recruitPosition = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
+          // Validate against known positions
+          const VALID_POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH'];
+          if (!VALID_POSITIONS.includes(recruitPosition)) recruitPosition = null;
         }
         if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
-          // Take everything before pipe, limit to 3 words to avoid hometown bleed
-          const raw = metaLines[i + 1].split(/[|]/)[0].trim();
-          recruitArchetype = raw.split(/\s+/).slice(0, 3).join(' ');
+          const raw = metaLines[i + 1].trim();
+          // Find best matching known archetype by checking if raw starts with it
+          const match = knownArchetypes.find(a =>
+            raw.toUpperCase().startsWith(a.toUpperCase())
+          );
+          recruitArchetype = match || null;
         }
       }
     }
