@@ -342,7 +342,8 @@ export async function handleButton(interaction) {
     let ocrText, recruitName = null;
     try {
       const ocrResult = await performOCR(session.attachmentUrl);
-      ocrText = ocrResult.text;
+      ocrText     = ocrResult.text;
+      recruitName = ocrResult.name;
     } catch (err) {
       console.error('OCR failed:', err);
       activeEdits.delete(interaction.user.id);
@@ -368,17 +369,24 @@ export async function handleButton(interaction) {
     const missing    = configuredAttrs.filter(a => !(a in attributes));
 
     if (missing.length > 0) {
-      // Prompt for first missing attribute
-      activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0 });
+      activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0, hasName: !!recruitName });
       await interaction.editReply({
-        content: 'Found **' + foundCount + '/10** attributes.\n\nWhat is the value for **' + missing[0] + '**? (or type `skip` to leave it out)',
+        content: 'Found **' + foundCount + '/10** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nWhat is the value for **' + missing[0] + '**? (or type `skip` to leave it out)',
         embeds: [createAnalysisEmbed(recruit)],
         components: [],
+      });
+    } else if (recruitName) {
+      // Name and all attrs found — go straight to confirm
+      activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
+      await interaction.editReply({
+        content: 'Found **10/10** attributes for **' + recruitName + '** ✅\n\nConfirm to calculate fit score:',
+        embeds: [createAnalysisEmbed(recruit)],
+        components: [getConfirmRow(recruit.id)],
       });
     } else {
       activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
       await interaction.editReply({
-        content: 'Found **10/10** attributes! ✅\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+        content: 'Found **10/10** attributes ✅\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
         embeds: [createAnalysisEmbed(recruit)],
         components: [],
       });
@@ -536,13 +544,20 @@ export async function handleMessage(message) {
 
     const nextFilled = filled + 1;
     if (nextFilled < missing.length) {
-      // More missing attrs to fill
-      activeEdits.set(message.author.id, { type: 'filling_missing', id, missing, filled: nextFilled });
+      activeEdits.set(message.author.id, { type: 'filling_missing', id, missing, filled: nextFilled, hasName: session.hasName });
       return message.reply('What is the value for **' + missing[nextFilled] + '**? (or type `skip` to leave it out)');
     }
 
-    // All done — move to naming
+    // All attrs done — go to name or confirm
     const { data: recruit } = await supabase.from('recruits').select('*').eq('id', id).single();
+    if (session.hasName) {
+      activeEdits.set(message.author.id, { type: 'analyze_confirm', id });
+      return message.reply({
+        content: 'Got it! Confirm to calculate fit score:',
+        embeds: [createAnalysisEmbed(recruit)],
+        components: [getConfirmRow(id)],
+      });
+    }
     activeEdits.set(message.author.id, { type: 'naming', id });
     return message.reply({
       content: 'Got it! Reply with the **recruit\'s name** (or type `skip` to leave unnamed):',
