@@ -72,8 +72,9 @@ const ABBREV_TO_OCR = Object.fromEntries(
 );
 
 export async function performOCR(imageUrl) {
-  const tmpRaw = join(tmpdir(), 'recruit_raw_' + Date.now() + '.png');
-  const tmpBox = join(tmpdir(), 'recruit_box_' + Date.now() + '.png');
+  const tmpRaw  = join(tmpdir(), 'recruit_raw_'  + Date.now() + '.png');
+  const tmpBox  = join(tmpdir(), 'recruit_box_'  + Date.now() + '.png');
+  const tmpName = join(tmpdir(), 'recruit_name_' + Date.now() + '.png');
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
@@ -82,28 +83,60 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Crop to just the attributes box (x: 45-72%, y: 40-78%)
+  // Crop 1: attributes box (x: 45-72%, y: 40-78%)
   const boxLeft   = Math.floor(w * 0.45);
   const boxTop    = Math.floor(h * 0.40);
   const boxWidth  = Math.floor(w * 0.27);
   const boxHeight = Math.floor(h * 0.38);
 
-  await sharp(tmpRaw)
-    .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
-    .greyscale()
-    .normalise()
-    .toFile(tmpBox);
+  // Crop 2: name region (x: 45-72%, y: 12-25%)
+  const nameLeft   = Math.floor(w * 0.45);
+  const nameTop    = Math.floor(h * 0.12);
+  const nameWidth  = Math.floor(w * 0.27);
+  const nameHeight = Math.floor(h * 0.13);
+
+  await Promise.all([
+    sharp(tmpRaw)
+      .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
+      .greyscale().normalise()
+      .resize({ width: boxWidth * 2, kernel: 'cubic' })
+      .toFile(tmpBox),
+    sharp(tmpRaw)
+      .extract({ left: nameLeft, top: nameTop, width: nameWidth, height: nameHeight })
+      .greyscale().normalise()
+      .resize({ width: nameWidth * 2, kernel: 'cubic' })
+      .toFile(tmpName),
+  ]);
 
   const worker = await createWorker('eng');
+  await worker.setParameters({
+    tessedit_pageseg_mode: '6',
+    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
+  });
   try {
-    const result = await worker.recognize(tmpBox);
-    const text = result.data.text;
+    const [attrResult, nameResult] = await Promise.all([
+      worker.recognize(tmpBox),
+      worker.recognize(tmpName),
+    ]);
+
+    const text = attrResult.data.text;
     console.log('OCR raw output:\n', text);
-    return { text };
+
+    // Extract name: first two lines that are a single capitalized word
+    const recruitName = nameResult.data.text
+      .split('\n')
+      .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
+      .filter(l => /^[A-Z][A-Za-z]+$/.test(l))
+      .slice(0, 2)
+      .join(' ') || null;
+    console.log('OCR name:', recruitName);
+
+    return { text, name: recruitName };
   } finally {
     await worker.terminate();
-    try { unlinkSync(tmpRaw); } catch {}
-    try { unlinkSync(tmpBox); } catch {}
+    try { unlinkSync(tmpRaw);  } catch {}
+    try { unlinkSync(tmpBox);  } catch {}
+    try { unlinkSync(tmpName); } catch {}
   }
 }
 
