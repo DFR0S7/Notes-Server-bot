@@ -76,48 +76,8 @@ export async function handleCommand(interaction) {
     if (!attachment?.contentType?.startsWith('image/')) {
       return interaction.reply({ content: 'Please attach a valid image file.', flags: 64 });
     }
-
-    await interaction.reply({ content: 'Reading screenshot...', flags: 64 });
-
-    let ocrPosition = null, ocrArchetype = null;
-    try {
-      const quick = await performOCR(attachment.url);
-      ocrPosition  = quick.position;
-      ocrArchetype = quick.archetype;
-    } catch {}
-
-    // Store full OCR result for later use
-    activeEdits.set(interaction.user.id, {
-      type: 'analyze_pending',
-      attachmentUrl: attachment.url,
-      ocrPosition,
-      ocrArchetype,
-    });
-
-    // If we got both position and archetype, verify config exists and skip buttons
-    if (ocrPosition && ocrArchetype) {
-      const { data: arch } = await supabase
-        .from('archetypes')
-        .select('ranges')
-        .eq('position', ocrPosition)
-        .eq('archetype', ocrArchetype)
-        .single();
-
-      if (arch?.ranges && Object.keys(arch.ranges).length > 0) {
-        return interaction.editReply({
-          content: 'Detected **' + ocrPosition + ' — ' + ocrArchetype + '**. Confirm to proceed or pick manually:',
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId('analyze_confirm_auto').setLabel('✅ Looks right').setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId('analyze_pick_manual').setLabel('Pick manually').setStyle(ButtonStyle.Secondary),
-            )
-          ],
-        });
-      }
-    }
-
-    // Fall back to manual position selection
-    return interaction.editReply({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
+    activeEdits.set(interaction.user.id, { type: 'analyze_pending', attachmentUrl: attachment.url });
+    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('analyze'), flags: 64 });
   }
 
   // /add-archetype
@@ -481,25 +441,6 @@ export async function handleButton(interaction) {
     return;
   }
 
-
-  // analyze_confirm_auto — user confirmed OCR-detected position/archetype
-  if (id === 'analyze_confirm_auto') {
-    const session = activeEdits.get(interaction.user.id);
-    if (!session?.attachmentUrl) {
-      return interaction.update({ content: 'Session expired. Please run /analyze again.', components: [] });
-    }
-    const { ocrPosition: position, ocrArchetype: archetype } = session;
-    activeEdits.set(interaction.user.id, { ...session, position, archetype });
-    // Trigger the same OCR flow as analyze_arch
-    await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
-    return runAnalysis(interaction, session, position, archetype);
-  }
-
-  // analyze_pick_manual — user wants to pick position/archetype manually
-  if (id === 'analyze_pick_manual') {
-    const session = activeEdits.get(interaction.user.id);
-    return interaction.update({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
-  }
 
   if (id.startsWith('analyze_pos_')) {
     const position = id.replace('analyze_pos_', '');
