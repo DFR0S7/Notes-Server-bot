@@ -102,7 +102,7 @@ export async function performOCR(imageUrl) {
   const metaWidth  = Math.floor(w * 0.17);
   const metaHeight = Math.floor(h * 0.16);
 
-  await Promise.all([
+  const cropPromises = [
     sharp(tmpRaw)
       .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
       .greyscale().normalise()
@@ -113,12 +113,21 @@ export async function performOCR(imageUrl) {
       .greyscale().normalise()
       .resize({ width: nameWidth * 2, kernel: 'cubic' })
       .toFile(tmpName),
-    sharp(tmpRaw)
-      .extract({ left: metaLeft, top: metaTop, width: metaWidth, height: metaHeight })
-      .greyscale().normalise()
-      .resize({ width: metaWidth * 2, kernel: 'cubic' })
-      .toFile(tmpMeta),
-  ]);
+  ];
+
+  // Only crop meta if dimensions are large enough
+  const metaValid = metaWidth >= 10 && metaHeight >= 10;
+  if (metaValid) {
+    cropPromises.push(
+      sharp(tmpRaw)
+        .extract({ left: metaLeft, top: metaTop, width: metaWidth, height: metaHeight })
+        .greyscale().normalise()
+        .resize({ width: metaWidth * 2, kernel: 'cubic' })
+        .toFile(tmpMeta)
+    );
+  }
+
+  await Promise.all(cropPromises);
 
   const worker = await createWorker('eng');
   await worker.setParameters({
@@ -129,7 +138,7 @@ export async function performOCR(imageUrl) {
     const [attrResult, nameResult, metaResult] = await Promise.all([
       worker.recognize(tmpBox),
       worker.recognize(tmpName),
-      worker.recognize(tmpMeta),
+      metaValid ? worker.recognize(tmpMeta) : Promise.resolve(null),
     ]);
 
     const text = attrResult.data.text;
@@ -145,26 +154,23 @@ export async function performOCR(imageUrl) {
     console.log('OCR name:', recruitName);
 
     // Extract position and archetype from meta region
-    // Pattern: line containing POSITION followed by line with "POS [Class]"
-    //          line containing ARCHETYPE followed by line with "Archetype Name | Hometown"
-    const metaLines = metaResult.data.text
-      .split('\n')
-      .map(l => l.replace(/[|]/g, '').trim())
-      .filter(l => l.length > 0);
-
     let recruitPosition = null;
     let recruitArchetype = null;
 
-    for (let i = 0; i < metaLines.length; i++) {
-      const upper = metaLines[i].toUpperCase();
-      if (upper.includes('POSITION') && metaLines[i + 1]) {
-        // Next line: "ATH High School" or "QB Transfer (SO)" — first token is position
-        recruitPosition = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
-      }
-      if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
-        // Next line: "East/West Playmaker | Stilwell, KS" or "Pocket Passer | Louisville, KY"
-        // Take everything before the first pipe or comma
-        recruitArchetype = metaLines[i + 1].split(/[|,]/)[0].trim();
+    if (metaResult) {
+      const metaLines = metaResult.data.text
+        .split('\n')
+        .map(l => l.replace(/[|]/g, '').trim())
+        .filter(l => l.length > 0);
+
+      for (let i = 0; i < metaLines.length; i++) {
+        const upper = metaLines[i].toUpperCase();
+        if (upper.includes('POSITION') && metaLines[i + 1]) {
+          recruitPosition = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
+        }
+        if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
+          recruitArchetype = metaLines[i + 1].split(/[|,]/)[0].trim();
+        }
       }
     }
     console.log('OCR position:', recruitPosition, '| archetype:', recruitArchetype);
