@@ -222,7 +222,7 @@ export async function handleCommand(interaction) {
 
     for (const [lg, tasks] of Object.entries(grouped)) {
       const done  = tasks.filter(t => t.done).length;
-      const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ' ' + t.task).join('\n');
+      const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ` \`#${t.id}\` ${t.task}`).join('\n');
       embed.addFields({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines });
     }
 
