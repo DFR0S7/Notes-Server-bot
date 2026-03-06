@@ -259,6 +259,31 @@ export async function handleCommand(interaction) {
     return;
   }
 
+  // /todo-change
+  if (commandName === 'todo-change') {
+    const id     = interaction.options.getInteger('id');
+    const action = interaction.options.getString('action');
+    const newTask = interaction.options.getString('task')?.trim();
+
+    const { data: task, error: fetchErr } = await supabase
+      .from('todos').select('*').eq('id', id).eq('user_id', interaction.user.id).single();
+    if (fetchErr || !task) return interaction.reply({ content: `No task found with ID **#${id}**.`, flags: MessageFlags.Ephemeral });
+
+    if (action === 'delete') {
+      const { error } = await supabase.from('todos').delete().eq('id', id);
+      if (error) return interaction.reply({ content: 'Failed to delete task. Try again.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `🗑️ Deleted task **#${id}**: *${task.task}*`, flags: MessageFlags.Ephemeral });
+    } else if (action === 'rename') {
+      if (!newTask) return interaction.reply({ content: 'Please provide a new task name.', flags: MessageFlags.Ephemeral });
+      const { error } = await supabase.from('todos').update({ task: newTask }).eq('id', id);
+      if (error) return interaction.reply({ content: 'Failed to rename task. Try again.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `✏️ Task **#${id}** renamed to: *${newTask}*`, flags: MessageFlags.Ephemeral });
+    }
+
+    postTodoList(interaction.user.id);
+    return;
+  }
+
 
   if (commandName === 'clear-recruit') {
     const id = interaction.options.getInteger('id');

@@ -65,6 +65,16 @@ const commands = [
     .setDescription('Uncheck all tasks for a league')
     .addStringOption(o => o.setName('league').setDescription('League name').setRequired(true)),
   new SlashCommandBuilder()
+    .setName('todo-change')
+    .setDescription('Delete or rename a task on your to-do list')
+    .addIntegerOption(o => o.setName('id').setDescription('Task ID (visible in /todo-list)').setRequired(true))
+    .addStringOption(o => o.setName('action').setDescription('What to do').setRequired(true)
+      .addChoices(
+        { name: 'Delete', value: 'delete' },
+        { name: 'Rename', value: 'rename' },
+      ))
+    .addStringOption(o => o.setName('task').setDescription('New task name (required for rename)').setRequired(false)),
+  new SlashCommandBuilder()
     .setName('todo-setchannel')
     .setDescription('Set the channel where the live todo list is posted')
     .addChannelOption(o => o.setName('channel').setDescription('Channel to post the live list in').setRequired(true)),
