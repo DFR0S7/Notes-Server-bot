@@ -366,16 +366,23 @@ export async function handleButton(interaction) {
 
     const foundCount = Object.keys(attributes).length;
     const missing    = configuredAttrs.filter(a => !(a in attributes));
-    const warning    = foundCount < 10
-      ? '\n⚠️ Only **' + foundCount + '/10** attributes found. Missing: **' + (missing.length ? missing.join(', ') : 'unknown') + '**. Use Edit Labels to fix.'
-      : '';
 
-    activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
-    await interaction.editReply({
-      content: 'Found **' + foundCount + '/10** attributes for **' + position + ' ' + archetype + '**.' + warning + '\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
-      embeds: [createAnalysisEmbed(recruit)],
-      components: [],
-    });
+    if (missing.length > 0) {
+      // Prompt for first missing attribute
+      activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0 });
+      await interaction.editReply({
+        content: 'Found **' + foundCount + '/10** attributes.\n\nWhat is the value for **' + missing[0] + '**? (or type `skip` to leave it out)',
+        embeds: [createAnalysisEmbed(recruit)],
+        components: [],
+      });
+    } else {
+      activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
+      await interaction.editReply({
+        content: 'Found **10/10** attributes! ✅\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+        embeds: [createAnalysisEmbed(recruit)],
+        components: [],
+      });
+    }
   }
 
   // config_pos_{POSITION}
@@ -510,6 +517,39 @@ export async function handleMessage(message) {
   if (!session) return;
 
   const text = message.content.trim();
+
+  // ── Fill missing attributes ────────────────────────────────────────────────
+  if (session.type === 'filling_missing') {
+    const { id, missing, filled } = session;
+    const attr = missing[filled];
+
+    if (text.toLowerCase() !== 'skip') {
+      const val = parseInt(text);
+      if (isNaN(val) || val < 1 || val > 99) {
+        return message.reply('Please enter a valid number (1-99) for **' + attr + '**, or type `skip`:');
+      }
+      // Fetch current attributes and add the new value
+      const { data: recruit } = await supabase.from('recruits').select('attributes').eq('id', id).single();
+      const updated = { ...recruit.attributes, [attr]: val };
+      await supabase.from('recruits').update({ attributes: updated }).eq('id', id);
+    }
+
+    const nextFilled = filled + 1;
+    if (nextFilled < missing.length) {
+      // More missing attrs to fill
+      activeEdits.set(message.author.id, { type: 'filling_missing', id, missing, filled: nextFilled });
+      return message.reply('What is the value for **' + missing[nextFilled] + '**? (or type `skip` to leave it out)');
+    }
+
+    // All done — move to naming
+    const { data: recruit } = await supabase.from('recruits').select('*').eq('id', id).single();
+    activeEdits.set(message.author.id, { type: 'naming', id });
+    return message.reply({
+      content: 'Got it! Reply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [],
+    });
+  }
 
   // ── Naming session ─────────────────────────────────────────────────────────
   if (session.type === 'naming') {
