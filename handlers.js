@@ -76,8 +76,48 @@ export async function handleCommand(interaction) {
     if (!attachment?.contentType?.startsWith('image/')) {
       return interaction.reply({ content: 'Please attach a valid image file.', flags: 64 });
     }
-    activeEdits.set(interaction.user.id, { type: 'analyze_pending', attachmentUrl: attachment.url });
-    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('analyze'), flags: 64 });
+
+    await interaction.reply({ content: 'Reading screenshot...', flags: 64 });
+
+    let ocrPosition = null, ocrArchetype = null;
+    try {
+      const quick = await performOCR(attachment.url);
+      ocrPosition  = quick.position;
+      ocrArchetype = quick.archetype;
+    } catch {}
+
+    // Store full OCR result for later use
+    activeEdits.set(interaction.user.id, {
+      type: 'analyze_pending',
+      attachmentUrl: attachment.url,
+      ocrPosition,
+      ocrArchetype,
+    });
+
+    // If we got both position and archetype, verify config exists and skip buttons
+    if (ocrPosition && ocrArchetype) {
+      const { data: arch } = await supabase
+        .from('archetypes')
+        .select('ranges')
+        .eq('position', ocrPosition)
+        .eq('archetype', ocrArchetype)
+        .single();
+
+      if (arch?.ranges && Object.keys(arch.ranges).length > 0) {
+        return interaction.editReply({
+          content: 'Detected **' + ocrPosition + ' — ' + ocrArchetype + '**. Confirm to proceed or pick manually:',
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId('analyze_confirm_auto').setLabel('✅ Looks right').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId('analyze_pick_manual').setLabel('Pick manually').setStyle(ButtonStyle.Secondary),
+            )
+          ],
+        });
+      }
+    }
+
+    // Fall back to manual position selection
+    return interaction.editReply({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
   }
 
   // /add-archetype
@@ -340,6 +380,77 @@ async function refreshTodoMessage(interaction, filter = '') {
   await interaction.update({ embeds: [embed], components });
 }
 
+// ── Analysis Helper ───────────────────────────────────────────────────────────
+async function runAnalysis(interaction, session, position, archetype) {
+  const { data: arch } = await supabase
+    .from('archetypes')
+    .select('ranges')
+    .eq('position', position.toUpperCase())
+    .eq('archetype', archetype)
+    .single();
+
+  const configuredAttrs = arch?.ranges ? Object.keys(arch.ranges) : [];
+
+  if (configuredAttrs.length === 0) {
+    return interaction.editReply({
+      content: 'No ranges configured for **' + position + ' ' + archetype + '**.\nPlease run `/config` first to set up attribute ranges before analyzing.',
+      components: [],
+    });
+  }
+
+  let ocrText, recruitName = null;
+  try {
+    const ocrResult = await performOCR(session.attachmentUrl);
+    ocrText     = ocrResult.text;
+    recruitName = ocrResult.name;
+  } catch (err) {
+    console.error('OCR failed:', err);
+    activeEdits.delete(interaction.user.id);
+    return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
+  }
+
+  const attributes = parseAttributes(ocrText, configuredAttrs);
+  activeEdits.delete(interaction.user.id);
+
+  if (Object.keys(attributes).length === 0) {
+    return interaction.editReply({ content: 'No ratings found. Make sure the screenshot clearly shows attribute numbers.' });
+  }
+
+  const { data: recruit, error } = await supabase
+    .from('recruits')
+    .insert({ user_id: interaction.user.id, position: position.toUpperCase(), archetype, attributes, name: recruitName, status: 'pending' })
+    .select()
+    .single();
+
+  if (error) return interaction.editReply({ content: 'Failed to save recruit. Try again.' });
+
+  const foundCount = Object.keys(attributes).length;
+  const missing    = configuredAttrs.filter(a => !(a in attributes));
+
+  if (missing.length > 0) {
+    activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0, hasName: !!recruitName });
+    return interaction.editReply({
+      content: 'Found **' + foundCount + '/10** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nWhat is the value for **' + missing[0] + '**? (or type `skip` to leave it out)',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [],
+    });
+  } else if (recruitName) {
+    activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
+    return interaction.editReply({
+      content: 'Found **10/10** attributes for **' + recruitName + '** ✅\n\nConfirm to calculate fit score:',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [getConfirmRow(recruit.id)],
+    });
+  } else {
+    activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
+    return interaction.editReply({
+      content: 'Found **10/10** attributes ✅\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [],
+    });
+  }
+}
+
 // ── Button Handler ────────────────────────────────────────────────────────────
 export async function handleButton(interaction) {
   const id = interaction.customId;
@@ -371,6 +482,25 @@ export async function handleButton(interaction) {
   }
 
 
+  // analyze_confirm_auto — user confirmed OCR-detected position/archetype
+  if (id === 'analyze_confirm_auto') {
+    const session = activeEdits.get(interaction.user.id);
+    if (!session?.attachmentUrl) {
+      return interaction.update({ content: 'Session expired. Please run /analyze again.', components: [] });
+    }
+    const { ocrPosition: position, ocrArchetype: archetype } = session;
+    activeEdits.set(interaction.user.id, { ...session, position, archetype });
+    // Trigger the same OCR flow as analyze_arch
+    await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
+    return runAnalysis(interaction, session, position, archetype);
+  }
+
+  // analyze_pick_manual — user wants to pick position/archetype manually
+  if (id === 'analyze_pick_manual') {
+    const session = activeEdits.get(interaction.user.id);
+    return interaction.update({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
+  }
+
   if (id.startsWith('analyze_pos_')) {
     const position = id.replace('analyze_pos_', '');
     const session  = activeEdits.get(interaction.user.id);
@@ -396,77 +526,8 @@ export async function handleButton(interaction) {
       return interaction.update({ content: 'Session expired. Please run /analyze again.', components: [] });
     }
 
-    // Check config exists and has ranges before running OCR
-    const { data: arch } = await supabase
-      .from('archetypes')
-      .select('ranges')
-      .eq('position', position.toUpperCase())
-      .eq('archetype', archetype)
-      .single();
-
-    const configuredAttrs = arch?.ranges ? Object.keys(arch.ranges) : [];
-
-    if (configuredAttrs.length === 0) {
-      return interaction.update({
-        content: 'No ranges configured for **' + position + ' ' + archetype + '**.\nPlease run `/config` first to set up attribute ranges before analyzing.',
-        components: [],
-      });
-    }
-
     await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
-
-    let ocrText, recruitName = null;
-    try {
-      const ocrResult = await performOCR(session.attachmentUrl);
-      ocrText     = ocrResult.text;
-      recruitName = ocrResult.name;
-    } catch (err) {
-      console.error('OCR failed:', err);
-      activeEdits.delete(interaction.user.id);
-      return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
-    }
-
-    const attributes = parseAttributes(ocrText, configuredAttrs);
-    activeEdits.delete(interaction.user.id);
-
-    if (Object.keys(attributes).length === 0) {
-      return interaction.editReply({ content: 'No ratings found. Make sure the screenshot clearly shows attribute numbers.' });
-    }
-
-    const { data: recruit, error } = await supabase
-      .from('recruits')
-      .insert({ user_id: interaction.user.id, position: position.toUpperCase(), archetype, attributes, name: recruitName, status: 'pending' })
-      .select()
-      .single();
-
-    if (error) return interaction.editReply({ content: 'Failed to save recruit. Try again.' });
-
-    const foundCount = Object.keys(attributes).length;
-    const missing    = configuredAttrs.filter(a => !(a in attributes));
-
-    if (missing.length > 0) {
-      activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0, hasName: !!recruitName });
-      await interaction.editReply({
-        content: 'Found **' + foundCount + '/10** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nWhat is the value for **' + missing[0] + '**? (or type `skip` to leave it out)',
-        embeds: [createAnalysisEmbed(recruit)],
-        components: [],
-      });
-    } else if (recruitName) {
-      // Name and all attrs found — go straight to confirm
-      activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
-      await interaction.editReply({
-        content: 'Found **10/10** attributes for **' + recruitName + '** ✅\n\nConfirm to calculate fit score:',
-        embeds: [createAnalysisEmbed(recruit)],
-        components: [getConfirmRow(recruit.id)],
-      });
-    } else {
-      activeEdits.set(interaction.user.id, { type: 'naming', id: recruit.id });
-      await interaction.editReply({
-        content: 'Found **10/10** attributes ✅\n\nReply with the **recruit\'s name** (or type `skip` to leave unnamed):',
-        embeds: [createAnalysisEmbed(recruit)],
-        components: [],
-      });
-    }
+    return runAnalysis(interaction, session, position, archetype);
   }
 
   // config_pos_{POSITION}
