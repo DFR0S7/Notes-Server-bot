@@ -144,13 +144,14 @@ export async function performOCR(imageUrl) {
     const text = attrResult.data.text;
     console.log('OCR raw output:\n', text);
 
-    // Extract name: first two lines that are a single capitalized word
-    const recruitName = nameResult.data.text
+    // Extract name: find lines that start with a capitalized word, take first word only
+    const nameLines = nameResult.data.text
       .split('\n')
       .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
-      .filter(l => /^[A-Z][A-Za-z]+$/.test(l))
-      .slice(0, 2)
-      .join(' ') || null;
+      .map(l => l.split(/\s+/)[0])
+      .filter(w => w && /^[A-Z][A-Za-z]{2,}$/.test(w) && !/^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|DE|DT|LB|CB|SS|FS)$/.test(w))
+      .slice(0, 2);
+    const recruitName = nameLines.length > 0 ? nameLines.join(' ') : null;
     console.log('OCR name:', recruitName);
 
     // Extract position and archetype from meta region
@@ -169,7 +170,9 @@ export async function performOCR(imageUrl) {
           recruitPosition = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
         }
         if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
-          recruitArchetype = metaLines[i + 1].split(/[|,]/)[0].trim();
+          // Take everything before pipe, limit to 3 words to avoid hometown bleed
+          const raw = metaLines[i + 1].split(/[|]/)[0].trim();
+          recruitArchetype = raw.split(/\s+/).slice(0, 3).join(' ');
         }
       }
     }
