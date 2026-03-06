@@ -64,6 +64,10 @@ const commands = [
     .setName('todo-reset')
     .setDescription('Uncheck all tasks for a league')
     .addStringOption(o => o.setName('league').setDescription('League name').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('todo-setchannel')
+    .setDescription('Set the channel where the live todo list is posted')
+    .addChannelOption(o => o.setName('channel').setDescription('Channel to post the live list in').setRequired(true)),
 ].map(c => c.toJSON());
 
 async function start() {

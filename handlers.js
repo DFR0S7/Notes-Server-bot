@@ -6,7 +6,65 @@ import {
   createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
   createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit,
 } from './utils.js';
-import { activeEdits } from './index.js';
+import { activeEdits, client } from './index.js';
+
+// ── Live Todo List ─────────────────────────────────────────────────────────────
+export async function postTodoList(userId) {
+  // Get configured channel
+  const { data: cfg } = await supabase
+    .from('todo_config')
+    .select('channel_id')
+    .eq('user_id', userId)
+    .single();
+  if (!cfg?.channel_id) return;
+
+  const channel = await client.channels.fetch(cfg.channel_id).catch(() => null);
+  if (!channel) return;
+
+  // Fetch all todos for this user
+  const { data: todos } = await supabase
+    .from('todos')
+    .select('*')
+    .eq('user_id', userId)
+    .order('league')
+    .order('id');
+  if (!todos?.length) return;
+
+  // Group by league
+  const grouped = {};
+  for (const row of todos) {
+    if (!grouped[row.league]) grouped[row.league] = [];
+    grouped[row.league].push(row);
+  }
+
+  // Build embeds (max 25 fields each)
+  const fields = [];
+  for (const [lg, tasks] of Object.entries(grouped)) {
+    const done  = tasks.filter(t => t.done).length;
+    const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ' ' + t.task).join('\n');
+    fields.push({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines.slice(0, 1024) });
+  }
+
+  const embeds = [];
+  for (let i = 0; i < fields.length; i += 25) {
+    const embed = new EmbedBuilder()
+      .setTitle(i === 0 ? '📋 League To-Do List' : '📋 (continued)')
+      .setColor(0x5865f2)
+      .addFields(fields.slice(i, i + 25));
+    if (i === 0) embed.setFooter({ text: 'Updated' }).setTimestamp();
+    embeds.push(embed);
+  }
+
+  // Wipe previous bot messages and repost
+  const messages = await channel.messages.fetch({ limit: 100 });
+  const botMessages = messages.filter(m => m.author.id === client.user.id);
+  for (const msg of botMessages.values()) {
+    await msg.delete().catch(() => null);
+  }
+  for (const embed of embeds) {
+    await channel.send({ embeds: [embed] });
+  }
+}
 
 // ── Command Handler ───────────────────────────────────────────────────────────
 export async function handleCommand(interaction) {
@@ -115,6 +173,18 @@ export async function handleCommand(interaction) {
     await interaction.reply({ embeds: [createRecruitDetailEmbed(data)], flags: 64 });
   }
 
+  // /todo-setchannel
+  if (commandName === 'todo-setchannel') {
+    const channel = interaction.options.getChannel('channel');
+    const { error } = await supabase
+      .from('todo_config')
+      .upsert({ user_id: interaction.user.id, channel_id: channel.id }, { onConflict: 'user_id' });
+    if (error) return interaction.reply({ content: 'Failed to save channel. Try again.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Live todo list will post to <#${channel.id}>.`, flags: MessageFlags.Ephemeral });
+    await postTodoList(interaction.user.id);
+    return;
+  }
+
   // /todo-add
   if (commandName === 'todo-add') {
     const league = interaction.options.getString('league').trim();
@@ -125,7 +195,9 @@ export async function handleCommand(interaction) {
       .select()
       .single();
     if (error) return interaction.reply({ content: 'Failed to add task. Try again.', flags: MessageFlags.Ephemeral });
-    return interaction.reply({ content: `✅ Added task **#${data.id}** to **${league}**:\n> ${task}`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `✅ Added task **#${data.id}** to **${league}**:\n> ${task}`, flags: MessageFlags.Ephemeral });
+    postTodoList(interaction.user.id);
+    return;
   }
 
   // /todo-list - read only embed
@@ -182,7 +254,9 @@ export async function handleCommand(interaction) {
     const { error } = await supabase
       .from('todos').update({ done: false }).eq('user_id', interaction.user.id).ilike('league', league);
     if (error) return interaction.reply({ content: 'Failed to reset tasks.', flags: MessageFlags.Ephemeral });
-    return interaction.reply({ content: `⬜ All tasks in **${league}** have been unchecked.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: `⬜ All tasks in **${league}** have been unchecked.`, flags: MessageFlags.Ephemeral });
+    postTodoList(interaction.user.id);
+    return;
   }
 
 
@@ -280,6 +354,7 @@ export async function handleButton(interaction) {
     if (fetchErr || !task) return interaction.reply({ content: 'Task not found.', flags: MessageFlags.Ephemeral });
     await supabase.from('todos').update({ done: !task.done }).eq('id', taskId);
     await refreshTodoMessage(interaction, filter);
+    postTodoList(interaction.user.id);
     return;
   }
 
@@ -291,6 +366,7 @@ export async function handleButton(interaction) {
     const filter = pipeIdx === -1 ? '' : rest.slice(pipeIdx + 1);
     await supabase.from('todos').update({ done: false }).eq('user_id', interaction.user.id).eq('league', league);
     await refreshTodoMessage(interaction, filter);
+    postTodoList(interaction.user.id);
     return;
   }
 
