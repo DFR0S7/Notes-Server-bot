@@ -261,6 +261,38 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     i++;
   }
 
+  // ── Recheck any value under 50 ────────────────────────────────────────────
+  // Values under 50 are almost certainly misreads — scan the number lines again
+  // with a digits-only pass to try to recover the correct value
+  const suspicious = Object.entries(attrs).filter(([, v]) => v < 50);
+  if (suspicious.length > 0) {
+    console.log('Suspicious values (< 50), rechecking:', suspicious.map(([k, v]) => k + ':' + v));
+    for (const [attr] of suspicious) {
+      // Find the line in rawLines that contained this attr's OCR name
+      const ocrName = ABBREV_TO_OCR[attr];
+      if (!ocrName) continue;
+      const rawLines = lines;
+      for (let j = 0; j < rawLines.length; j++) {
+        const upper = rawLines[j].toUpperCase().replace(/[^A-Z\s]/g, '');
+        if (upper.includes(ocrName.toUpperCase().split(' ')[0])) {
+          // Re-extract numbers from this line and the next more aggressively
+          const candidates = [];
+          for (let k = j; k <= j + 2 && k < rawLines.length; k++) {
+            const nums = rawLines[k].match(/\d+/g);
+            if (nums) candidates.push(...nums.map(Number).filter(n => n >= 50 && n <= 99));
+          }
+          if (candidates.length > 0) {
+            // Pick the first valid candidate that replaces the suspicious value
+            const recheck = candidates[0];
+            console.log('Recheck ' + attr + ': ' + attrs[attr] + ' -> ' + recheck);
+            attrs[attr] = recheck;
+          }
+          break;
+        }
+      }
+    }
+  }
+
   console.log('Parsed attributes:', attrs);
   return attrs;
 }
