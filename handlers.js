@@ -76,8 +76,46 @@ export async function handleCommand(interaction) {
     if (!attachment?.contentType?.startsWith('image/')) {
       return interaction.reply({ content: 'Please attach a valid image file.', flags: 64 });
     }
-    activeEdits.set(interaction.user.id, { type: 'analyze_pending', attachmentUrl: attachment.url });
-    await interaction.reply({ content: 'Step 1: Select a position', components: getPositionRows('analyze'), flags: 64 });
+
+    await interaction.reply({ content: 'Reading screenshot...', flags: 64 });
+
+    let ocrText = null, ocrName = null, ocrPosition = null, ocrArchetype = null;
+    try {
+      const quick = await performOCR(attachment.url);
+      ocrText      = quick.text;
+      ocrName      = quick.name;
+      ocrPosition  = quick.position;
+      ocrArchetype = quick.archetype;
+    } catch {}
+
+    activeEdits.set(interaction.user.id, {
+      type: 'analyze_pending',
+      attachmentUrl: attachment.url,
+      ocrText,
+      ocrName,
+      ocrPosition,
+      ocrArchetype,
+    });
+
+    if (ocrPosition && ocrArchetype) {
+      const { data: arch } = await supabase
+        .from('archetypes').select('ranges')
+        .eq('position', ocrPosition).eq('archetype', ocrArchetype).single();
+
+      if (arch?.ranges && Object.keys(arch.ranges).length > 0) {
+        return interaction.editReply({
+          content: 'Detected **' + ocrPosition + ' — ' + ocrArchetype + '**. Confirm to proceed or pick manually:',
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId('analyze_confirm_auto').setLabel('✅ Looks right').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId('analyze_pick_manual').setLabel('Pick manually').setStyle(ButtonStyle.Secondary),
+            )
+          ],
+        });
+      }
+    }
+
+    return interaction.editReply({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
   }
 
   // /add-archetype
@@ -227,7 +265,7 @@ export async function handleCommand(interaction) {
     for (const [lg, tasks] of Object.entries(grouped)) {
       const done  = tasks.filter(t => t.done).length;
       const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ` \`#${t.id}\` ${t.task}`).join('\n');
-      embed.addFields({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines });
+      embed.addFields({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines.slice(0, 1024) });
     }
 
     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
@@ -268,7 +306,7 @@ export async function handleCommand(interaction) {
       await interaction.reply({ content: `🗑️ Deleted task **#${id}**: *${task.task}*`, flags: MessageFlags.Ephemeral });
     } else if (action === 'rename') {
       if (!newTask) return interaction.reply({ content: 'Please provide a new task name.', flags: MessageFlags.Ephemeral });
-      const { error } = await supabase.from('todos').update({ task: newTask }).eq('id', id);
+      const { error } = await supabase.from('todos').update({ task: newTask }).eq('id', id).eq('user_id', interaction.user.id);
       if (error) return interaction.reply({ content: 'Failed to rename task. Try again.', flags: MessageFlags.Ephemeral });
       await interaction.reply({ content: `✏️ Task **#${id}** renamed to: *${newTask}*`, flags: MessageFlags.Ephemeral });
     }
@@ -310,16 +348,19 @@ function buildTodoEmbed(grouped, filter = '') {
   for (const [lg, tasks] of Object.entries(grouped)) {
     const done  = tasks.filter(t => t.done).length;
     const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ` \`#${t.id}\` ${t.task}`).join('\n');
-    embed.addFields({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines });
+    embed.addFields({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines.slice(0, 1024) });
   }
 
   const components = [];
   let row = new ActionRowBuilder();
   let btnCount = 0;
+  let totalBtns = 0;
   const f = filter ? '|' + filter : '';
+  const MAX_BTNS = 19; // reserve 1 slot per row-of-5 for the Save button (4 rows × 5 = 20, minus Save = 19)
 
   for (const [, tasks] of Object.entries(grouped)) {
     for (const t of tasks) {
+      if (totalBtns >= MAX_BTNS) break;
       if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
       row.addComponents(
         new ButtonBuilder()
@@ -328,11 +369,13 @@ function buildTodoEmbed(grouped, filter = '') {
           .setStyle(t.done ? ButtonStyle.Secondary : ButtonStyle.Primary)
       );
       btnCount++;
+      totalBtns++;
     }
+    if (totalBtns >= MAX_BTNS) break;
   }
 
   // Save button
-  if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
+  if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); }
   row.addComponents(
     new ButtonBuilder()
       .setCustomId('todo_save' + f)
@@ -379,9 +422,14 @@ async function runAnalysis(interaction, session, position, archetype) {
 
   let ocrText, recruitName = null;
   try {
-    const ocrResult = await performOCR(session.attachmentUrl);
-    ocrText     = ocrResult.text;
-    recruitName = ocrResult.name;
+    if (session.ocrText) {
+      ocrText     = session.ocrText;
+      recruitName = session.ocrName ?? null;
+    } else {
+      const ocrResult = await performOCR(session.attachmentUrl);
+      ocrText     = ocrResult.text;
+      recruitName = ocrResult.name;
+    }
   } catch (err) {
     console.error('OCR failed:', err);
     activeEdits.delete(interaction.user.id);
@@ -453,6 +501,19 @@ export async function handleButton(interaction) {
     await refreshTodoMessage(interaction, filter);
     postTodoList(interaction.user.id);
     return;
+  }
+
+  // analyze_confirm_auto
+  if (id === 'analyze_confirm_auto') {
+    const session = activeEdits.get(interaction.user.id);
+    if (!session?.attachmentUrl) return interaction.update({ content: 'Session expired. Please run /analyze again.', components: [] });
+    await interaction.update({ content: 'Running OCR — this may take up to 1 minute...', components: [] });
+    return runAnalysis(interaction, session, session.ocrPosition, session.ocrArchetype);
+  }
+
+  // analyze_pick_manual
+  if (id === 'analyze_pick_manual') {
+    return interaction.update({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
   }
 
   if (id.startsWith('analyze_pos_')) {
