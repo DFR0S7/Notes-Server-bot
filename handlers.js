@@ -41,7 +41,7 @@ export async function postTodoList(userId) {
   const fields = [];
   for (const [lg, tasks] of Object.entries(grouped)) {
     const done  = tasks.filter(t => t.done).length;
-    const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ' ' + t.task).join('\n');
+    const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ` \`#${t.id}\` ${t.task}`).join('\n');
     fields.push({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines.slice(0, 1024) });
   }
 
@@ -185,17 +185,21 @@ export async function handleCommand(interaction) {
     return;
   }
 
-  // /todo-add
+  // /todo-add (bulk: comma-separated tasks)
   if (commandName === 'todo-add') {
     const league = interaction.options.getString('league').trim();
-    const task   = interaction.options.getString('task').trim();
-    const { data, error } = await supabase
-      .from('todos')
-      .insert({ user_id: interaction.user.id, league, task, done: false })
-      .select()
-      .single();
-    if (error) return interaction.reply({ content: 'Failed to add task. Try again.', flags: MessageFlags.Ephemeral });
-    await interaction.reply({ content: `✅ Added task **#${data.id}** to **${league}**:\n> ${task}`, flags: MessageFlags.Ephemeral });
+    const raw    = interaction.options.getString('task').trim();
+    const tasks  = raw.split(',').map(t => t.trim()).filter(Boolean);
+
+    const rows = tasks.map(task => ({ user_id: interaction.user.id, league, task, done: false }));
+    const { data, error } = await supabase.from('todos').insert(rows).select();
+    if (error) return interaction.reply({ content: 'Failed to add tasks. Try again.', flags: MessageFlags.Ephemeral });
+
+    const added = data.map(d => `> \`#${d.id}\` ${d.task}`).join('\n');
+    await interaction.reply({
+      content: `✅ Added **${data.length}** task${data.length > 1 ? 's' : ''} to **${league}**:\n${added}`,
+      flags: MessageFlags.Ephemeral,
+    });
     postTodoList(interaction.user.id);
     return;
   }
@@ -229,8 +233,8 @@ export async function handleCommand(interaction) {
     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
-  // /todo-edit - interactive embed with buttons
-  if (commandName === 'todo-edit') {
+  // /todo-update - interactive embed with toggle buttons and save
+  if (commandName === 'todo-update') {
     const league = interaction.options.getString('league') || '';
     let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
     if (league) query = query.ilike('league', league.trim());
@@ -246,17 +250,6 @@ export async function handleCommand(interaction) {
 
     const { embed, components } = buildTodoEmbed(grouped, league);
     return interaction.reply({ embeds: [embed], components, flags: MessageFlags.Ephemeral });
-  }
-
-  // /todo-reset
-  if (commandName === 'todo-reset') {
-    const league = interaction.options.getString('league').trim();
-    const { error } = await supabase
-      .from('todos').update({ done: false }).eq('user_id', interaction.user.id).ilike('league', league);
-    if (error) return interaction.reply({ content: 'Failed to reset tasks.', flags: MessageFlags.Ephemeral });
-    await interaction.reply({ content: `⬜ All tasks in **${league}** have been unchecked.`, flags: MessageFlags.Ephemeral });
-    postTodoList(interaction.user.id);
-    return;
   }
 
   // /todo-change
@@ -316,7 +309,7 @@ function buildTodoEmbed(grouped, filter = '') {
 
   for (const [lg, tasks] of Object.entries(grouped)) {
     const done  = tasks.filter(t => t.done).length;
-    const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ' ' + t.task).join('\n');
+    const lines = tasks.map(t => (t.done ? '☑️' : '⬜') + ` \`#${t.id}\` ${t.task}`).join('\n');
     embed.addFields({ name: lg + ' (' + done + '/' + tasks.length + ')', value: lines });
   }
 
@@ -325,7 +318,7 @@ function buildTodoEmbed(grouped, filter = '') {
   let btnCount = 0;
   const f = filter ? '|' + filter : '';
 
-  for (const [lg, tasks] of Object.entries(grouped)) {
+  for (const [, tasks] of Object.entries(grouped)) {
     for (const t of tasks) {
       if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
       row.addComponents(
@@ -336,16 +329,17 @@ function buildTodoEmbed(grouped, filter = '') {
       );
       btnCount++;
     }
-    if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId('todo_reset_' + lg + f)
-        .setLabel('↺ Reset ' + lg)
-        .setStyle(ButtonStyle.Danger)
-    );
-    btnCount++;
   }
-  if (btnCount > 0) components.push(row);
+
+  // Save button
+  if (btnCount === 5) { components.push(row); row = new ActionRowBuilder(); btnCount = 0; }
+  row.addComponents(
+    new ButtonBuilder()
+      .setCustomId('todo_save' + f)
+      .setLabel('💾 Save')
+      .setStyle(ButtonStyle.Success)
+  );
+  components.push(row);
 
   return { embed, components };
 }
@@ -450,22 +444,16 @@ export async function handleButton(interaction) {
     if (fetchErr || !task) return interaction.reply({ content: 'Task not found.', flags: MessageFlags.Ephemeral });
     await supabase.from('todos').update({ done: !task.done }).eq('id', taskId);
     await refreshTodoMessage(interaction, filter);
-    postTodoList(interaction.user.id);
     return;
   }
 
-  // todo_reset_{league} or todo_reset_{league}|{filter}
-  if (id.startsWith('todo_reset_')) {
-    const rest   = id.replace('todo_reset_', '');
-    const pipeIdx = rest.indexOf('|');
-    const league = pipeIdx === -1 ? rest : rest.slice(0, pipeIdx);
-    const filter = pipeIdx === -1 ? '' : rest.slice(pipeIdx + 1);
-    await supabase.from('todos').update({ done: false }).eq('user_id', interaction.user.id).eq('league', league);
+  // todo_save — save and update live channel
+  if (id.startsWith('todo_save')) {
+    const filter = id.includes('|') ? id.split('|')[1] : '';
     await refreshTodoMessage(interaction, filter);
     postTodoList(interaction.user.id);
     return;
   }
-
 
   if (id.startsWith('analyze_pos_')) {
     const position = id.replace('analyze_pos_', '');

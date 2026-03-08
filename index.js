@@ -57,13 +57,9 @@ const commands = [
     .setDescription('View your to-do list')
     .addStringOption(o => o.setName('league').setDescription('Filter by league (optional)').setRequired(false)),
   new SlashCommandBuilder()
-    .setName('todo-edit')
+    .setName('todo-update')
     .setDescription('Check off tasks on your to-do list')
     .addStringOption(o => o.setName('league').setDescription('Filter by league (optional)').setRequired(false)),
-  new SlashCommandBuilder()
-    .setName('todo-reset')
-    .setDescription('Uncheck all tasks for a league')
-    .addStringOption(o => o.setName('league').setDescription('League name').setRequired(true)),
   new SlashCommandBuilder()
     .setName('todo-change')
     .setDescription('Delete or rename a task on your to-do list')
