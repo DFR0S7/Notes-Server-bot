@@ -187,7 +187,7 @@ export async function handleCommand(interaction) {
 
   // /todo-add (bulk: comma-separated tasks)
   if (commandName === 'todo-add') {
-    const league = interaction.options.getString('league').trim();
+    const league = interaction.options.getString('league').trim().toLowerCase();
     const raw    = interaction.options.getString('task').trim();
     const tasks  = raw.split(',').map(t => t.trim()).filter(Boolean);
 
@@ -206,7 +206,7 @@ export async function handleCommand(interaction) {
 
   // /todo-list - read only embed
   if (commandName === 'todo-list') {
-    const league = interaction.options.getString('league');
+    const league = interaction.options.getString('league')?.trim().toLowerCase() || null;
     let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
     if (league) query = query.ilike('league', league.trim());
     const { data, error } = await query;
@@ -235,7 +235,7 @@ export async function handleCommand(interaction) {
 
   // /todo-update - interactive embed with toggle buttons and save
   if (commandName === 'todo-update') {
-    const league = interaction.options.getString('league') || '';
+    const league = interaction.options.getString('league')?.trim().toLowerCase() || '';
     let query = supabase.from('todos').select('*').eq('user_id', interaction.user.id).order('league').order('id');
     if (league) query = query.ilike('league', league.trim());
     const { data, error } = await query;
