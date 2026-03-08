@@ -148,7 +148,7 @@ export function createBreakdownEmbed(recruit, score, breakdown, warning = null) 
       })
     : breakdown;
   const lines = sorted.map(b => {
-    const icon = b.pass ? '✅' : b.above ? '🔺' : '❌';
+    const icon = b.above ? '⬆️' : b.pass ? '✅' : '❌';
     return icon + ' **' + b.attr + '**: ' + b.value + ' _(range: ' + b.min + '-' + b.max + ')_';
   }).join('\n') || 'No data';
 
@@ -255,7 +255,7 @@ export async function calculateFit(position, archetype, attributes) {
     total++;
     const inRange = value >= range.min && value <= range.max;
     const above   = value > range.max;
-    if (inRange) matched++;
+    if (inRange || above) matched++;
     breakdown.push({ attr, value, min: range.min, max: range.max, pass: inRange, above });
   }
 
