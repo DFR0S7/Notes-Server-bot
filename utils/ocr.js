@@ -18,7 +18,7 @@ const NAME_MAP = {
   'INJURY':               'INJ',
   'THROW POWER':          'THP',
   'SHORT ACCURACY':       'SAC',
-  'MID ACCURACY':         'MAC',
+  'MEDIUM ACCURACY':      'MAC',
   'DEEP ACCURACY':        'DAC',
   'THROW ON RUN':         'TOR',
   'UNDER PRESSURE':       'TUP',
@@ -219,7 +219,7 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     const line = raw
       .replace(/THROWPOWER/g, 'THROW POWER')
       .replace(/SHORTACCURACY/g, 'SHORT ACCURACY')
-      .replace(/MIDACCURACY/g, 'MID ACCURACY')
+      .replace(/MIDACCURACY/g, 'MEDIUM ACCURACY')
       .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
       .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
       .replace(/THROW\s?ON\s?RUN/g, 'THROW ON RUN')
