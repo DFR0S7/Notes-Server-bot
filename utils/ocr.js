@@ -312,33 +312,39 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
   }
 
   // ── Recheck any value under 50 ────────────────────────────────────────────
-  // Values under 50 are almost certainly misreads — scan the number lines again
-  // with a digits-only pass to try to recover the correct value
+  // Only recheck attributes that appeared alone on their line (not paired).
+  // Paired lines are handled correctly by the main pass — rechecking them
+  // risks stealing the neighbor's number.
   const suspicious = Object.entries(attrs).filter(([, v]) => v < 50);
   if (suspicious.length > 0) {
     console.log('Suspicious values (< 50), rechecking:', suspicious.map(([k, v]) => k + ':' + v));
     for (const [attr] of suspicious) {
-      // Find the line in rawLines that contained this attr's OCR name
       const ocrName = ABBREV_TO_OCR[attr];
       if (!ocrName) continue;
-      const rawLines = lines;
-      for (let j = 0; j < rawLines.length; j++) {
-        const upper = rawLines[j].toUpperCase().replace(/[^A-Z\s]/g, '');
-        if (upper.includes(ocrName.toUpperCase())) {
-          // Re-extract numbers from this line and the next more aggressively
-          const candidates = [];
-          for (let k = j; k <= j + 2 && k < rawLines.length; k++) {
-            const nums = rawLines[k].match(/\d+/g);
-            if (nums) candidates.push(...nums.map(Number).filter(n => n >= 50 && n <= 99));
-          }
-          if (candidates.length > 0) {
-            // Pick the first valid candidate that replaces the suspicious value
-            const recheck = candidates[0];
-            console.log('Recheck ' + attr + ': ' + attrs[attr] + ' -> ' + recheck);
-            attrs[attr] = recheck;
-          }
+      for (let j = 0; j < lines.length; j++) {
+        const upper = lines[j].toUpperCase().replace(/[^A-Z\s]/g, '');
+        if (!upper.includes(ocrName.toUpperCase())) continue;
+
+        // Count how many known attribute names appear on this line
+        const namesOnLine = ALL_NAMES.filter(n => {
+          const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return new RegExp('\\b' + escaped + '\\b').test(upper);
+        });
+
+        // Only recheck if this attribute was alone on the line
+        if (namesOnLine.length !== 1) {
+          console.log('Skipping recheck for ' + attr + ' — paired line, leaving to manual fill.');
           break;
         }
+
+        // Look only at the next line, same as main pass
+        const nextLine = (lines[j + 1] || '').trim();
+        const candidates = (nextLine.match(/\d+/g) || []).map(Number).filter(n => n >= 50 && n <= 99);
+        if (candidates.length > 0) {
+          console.log('Recheck ' + attr + ': ' + attrs[attr] + ' -> ' + candidates[0]);
+          attrs[attr] = candidates[0];
+        }
+        break;
       }
     }
   }
