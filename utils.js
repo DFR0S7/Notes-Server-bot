@@ -57,7 +57,7 @@ export function getAttributeOrder(position, archetype) {
       return WR_DEFAULT;
     case 'ATH':
       if (archetype === 'Thumper' || archetype === 'Signal Caller') return LB_ORDER;
-      if (archetype === 'Power Rushers') return DE_ORDER;
+      if (archetype === 'Power Rusher') return DE_ORDER;
       if (archetype === 'Dual Threat')   return QB_ORDER;
       // HB-style ATH archetypes
       return HB_ORDER;
@@ -88,15 +88,15 @@ export function getPositionRows(commandType) {
 }
 
 export async function getArchetypeRows(commandType, position) {
-  let archetypes = ARCHETYPES[position] ?? [];
-  if (archetypes.length === 0) {
-    const { data } = await supabase
-      .from('archetypes')
-      .select('archetype')
-      .eq('position', position.toUpperCase());
-    archetypes = (data || []).map(r => r.archetype);
-  }
-  return toRows(archetypes, commandType + '_arch_' + position + '_');
+  const inMemory = ARCHETYPES[position] ?? [];
+  const { data } = await supabase
+    .from('archetypes')
+    .select('archetype')
+    .eq('position', position.toUpperCase());
+  const fromDb = (data || []).map(r => r.archetype);
+  // Merge: DB is source of truth, in-memory fills any gaps not yet in DB
+  const merged = [...new Set([...fromDb, ...inMemory])];
+  return toRows(merged, commandType + '_arch_' + position + '_');
 }
 
 export function getConfirmRow(recruitId) {
@@ -137,8 +137,8 @@ export function createAnalysisEmbed(recruit) {
 }
 
 export function createBreakdownEmbed(recruit, score, breakdown, warning = null) {
-  const color = score >= 80 ? 0x2ecc71 : score >= 60 ? 0xf39c12 : 0xe74c3c;
-  const icon  = score >= 80 ? '🟢' : score >= 60 ? '🟡' : '🔴';
+  const color     = score >= 80 ? 0x2ecc71 : score >= 60 ? 0xf39c12 : 0xe74c3c;
+  const scoreIcon = score >= 80 ? '🟢' : score >= 60 ? '🟡' : '🔴';
   const order = getAttributeOrder(recruit?.position, recruit?.archetype);
   const sorted = order
     ? [...breakdown].sort((a, b) => {
@@ -153,8 +153,8 @@ export function createBreakdownEmbed(recruit, score, breakdown, warning = null) 
   }).join('\n') || 'No data';
 
   const title = recruit?.name
-    ? icon + ' ' + recruit.name + ' — Fit Score: ' + score + '%'
-    : icon + ' Fit Score: ' + score + '%';
+    ? scoreIcon + ' ' + recruit.name + ' — Fit Score: ' + score + '%'
+    : scoreIcon + ' Fit Score: ' + score + '%';
 
   const embed = new EmbedBuilder()
     .setTitle(title)
