@@ -4,6 +4,7 @@ import { writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
+import { supabase } from '../supabase.js';
 
 // Maps OCR text (uppercase) → abbreviation used in config
 const NAME_MAP = {
@@ -18,7 +19,6 @@ const NAME_MAP = {
   'THROW POWER':          'THP',
   'SHORT ACCURACY':       'SAC',
   'MID ACCURACY':         'MAC',
-  'MEDIUM ACCURACY':      'MAC',
   'DEEP ACCURACY':        'DAC',
   'THROW ON RUN':         'TOR',
   'UNDER PRESSURE':       'TUP',
@@ -75,6 +75,7 @@ export async function performOCR(imageUrl) {
   const tmpRaw  = join(tmpdir(), 'recruit_raw_'  + Date.now() + '.png');
   const tmpBox  = join(tmpdir(), 'recruit_box_'  + Date.now() + '.png');
   const tmpName = join(tmpdir(), 'recruit_name_' + Date.now() + '.png');
+  const tmpMeta = join(tmpdir(), 'recruit_meta_' + Date.now() + '.png');
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
   writeFileSync(tmpRaw, Buffer.from(response.data));
@@ -97,6 +98,13 @@ export async function performOCR(imageUrl) {
 
   const nameValid = nameWidth >= 10 && nameHeight >= 10;
 
+  // Crop 3: position/archetype region (x: 68-85%, y: 12-28%)
+  const metaLeft   = Math.floor(w * 0.68);
+  const metaTop    = Math.floor(h * 0.12);
+  const metaWidth  = Math.floor(w * 0.17);
+  const metaHeight = Math.floor(h * 0.16);
+  const metaValid  = metaWidth >= 10 && metaHeight >= 10;
+
   const cropPromises = [
     sharp(tmpRaw)
       .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
@@ -115,6 +123,16 @@ export async function performOCR(imageUrl) {
     );
   }
 
+  if (metaValid) {
+    cropPromises.push(
+      sharp(tmpRaw)
+        .extract({ left: metaLeft, top: metaTop, width: metaWidth, height: metaHeight })
+        .greyscale().normalise()
+        .resize({ width: metaWidth * 2, kernel: 'cubic' })
+        .toFile(tmpMeta)
+    );
+  }
+
   await Promise.all(cropPromises);
 
   const worker = await createWorker('eng');
@@ -123,15 +141,16 @@ export async function performOCR(imageUrl) {
     tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
   });
   try {
-    const [attrResult, nameResult] = await Promise.all([
+    const [attrResult, nameResult, metaResult] = await Promise.all([
       worker.recognize(tmpBox),
       nameValid ? worker.recognize(tmpName) : Promise.resolve(null),
+      metaValid ? worker.recognize(tmpMeta) : Promise.resolve(null),
     ]);
 
     const text = attrResult.data.text;
     console.log('OCR raw output:\n', text);
 
-    // Extract name: find lines starting with a capitalized word, skip position/archetype keywords
+    // Extract name
     const SKIP_WORDS = /^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|DE|DT|LB|CB|SS|FS)$/;
     const recruitName = nameResult
       ? (nameResult.data.text
@@ -144,12 +163,43 @@ export async function performOCR(imageUrl) {
       : null;
     console.log('OCR name:', recruitName);
 
-    return { text, name: recruitName };
+    // Extract position and archetype from meta region
+    let recruitPosition = null;
+    let recruitArchetype = null;
+
+    if (metaResult) {
+      const metaLines = metaResult.data.text
+        .split('\n')
+        .map(l => l.replace(/[|]/g, '').trim())
+        .filter(l => l.length > 0);
+
+      const { data: allArchetypes } = await supabase.from('archetypes').select('position, archetype');
+      const knownArchetypes = allArchetypes?.map(a => a.archetype) || [];
+      const VALID_POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH'];
+
+      for (let i = 0; i < metaLines.length; i++) {
+        const upper = metaLines[i].toUpperCase();
+        if (upper.includes('POSITION') && metaLines[i + 1]) {
+          const pos = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
+          if (VALID_POSITIONS.includes(pos)) recruitPosition = pos;
+        }
+        if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
+          const raw = metaLines[i + 1].trim();
+          recruitArchetype = knownArchetypes.find(a =>
+            raw.toUpperCase().startsWith(a.toUpperCase())
+          ) || null;
+        }
+      }
+    }
+    console.log('OCR position:', recruitPosition, '| archetype:', recruitArchetype);
+
+    return { text, name: recruitName, position: recruitPosition, archetype: recruitArchetype };
   } finally {
     await worker.terminate();
     try { unlinkSync(tmpRaw);  } catch {}
     try { unlinkSync(tmpBox);  } catch {}
     try { unlinkSync(tmpName); } catch {}
+    try { unlinkSync(tmpMeta); } catch {}
   }
 }
 
@@ -274,7 +324,7 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       const rawLines = lines;
       for (let j = 0; j < rawLines.length; j++) {
         const upper = rawLines[j].toUpperCase().replace(/[^A-Z\s]/g, '');
-        if (upper.includes(ocrName.toUpperCase().split(' ')[0])) {
+        if (upper.includes(ocrName.toUpperCase())) {
           // Re-extract numbers from this line and the next more aggressively
           const candidates = [];
           for (let k = j; k <= j + 2 && k < rawLines.length; k++) {
