@@ -2,7 +2,7 @@ import './server.js';
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import axios from 'axios';
 import { config } from './config.js';
-import { handleCommand, handleButton, handleMessage } from './handlers.js';
+import { handleCommand, handleButton, handleMessage, handleModal } from './handlers.js';
 
 export const client = new Client({
   intents: [
@@ -111,6 +111,7 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) return handleCommand(interaction);
     if (interaction.isButton())           return handleButton(interaction);
+    if (interaction.isModalSubmit())      return handleModal(interaction);
   } catch (err) {
     console.error('Interaction error:', err);
     const msg = { content: 'Something went wrong.', flags: 64 };

@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { supabase } from './supabase.js';
 import { performOCR, parseAttributes } from './utils/ocr.js';
 import {
@@ -77,16 +77,20 @@ export async function handleCommand(interaction) {
       return interaction.reply({ content: 'Please attach a valid image file.', flags: 64 });
     }
 
-    await interaction.reply({ content: 'Reading screenshot...', flags: 64 });
+    await interaction.reply({ content: '📸 Reading screenshot...', flags: 64 });
 
     let ocrText = null, ocrName = null, ocrPosition = null, ocrArchetype = null;
     try {
+      await interaction.editReply({ content: '🔍 Scanning attributes...' });
       const quick = await performOCR(attachment.url);
       ocrText      = quick.text;
       ocrName      = quick.name;
       ocrPosition  = quick.position;
       ocrArchetype = quick.archetype;
-    } catch {}
+      await interaction.editReply({ content: '✅ Scan complete!' });
+    } catch {
+      await interaction.editReply({ content: '⚠️ Scan failed — you can still pick position manually.' });
+    }
 
     activeEdits.set(interaction.user.id, {
       type: 'analyze_pending',
@@ -402,7 +406,21 @@ async function refreshTodoMessage(interaction, filter = '') {
   await interaction.update({ embeds: [embed], components });
 }
 
-// ── Analysis Helper ───────────────────────────────────────────────────────────
+// ── Missing Attr Button Row ───────────────────────────────────────────────────
+function getMissingAttrRow(recruitId, attr) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('fill_attr_' + recruitId + '_' + attr)
+      .setLabel('Enter ' + attr)
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('skip_attr_' + recruitId + '_' + attr)
+      .setLabel('Skip')
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+
 async function runAnalysis(interaction, session, position, archetype) {
   const { data: arch } = await supabase
     .from('archetypes')
@@ -425,10 +443,13 @@ async function runAnalysis(interaction, session, position, archetype) {
     if (session.ocrText) {
       ocrText     = session.ocrText;
       recruitName = session.ocrName ?? null;
+      await interaction.editReply({ content: '📊 Parsing attributes...' });
     } else {
+      await interaction.editReply({ content: '🔍 Scanning attributes...' });
       const ocrResult = await performOCR(session.attachmentUrl);
       ocrText     = ocrResult.text;
       recruitName = ocrResult.name;
+      await interaction.editReply({ content: '📊 Parsing attributes...' });
     }
   } catch (err) {
     console.error('OCR failed:', err);
@@ -456,10 +477,11 @@ async function runAnalysis(interaction, session, position, archetype) {
 
   if (missing.length > 0) {
     activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0, hasName: !!recruitName });
+    const missingList = missing.map(a => '`' + a + '`').join(', ');
     return interaction.editReply({
-      content: 'Found **' + foundCount + '/10** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nWhat is the value for **' + missing[0] + '**? (or type `skip` to leave it out)',
+      content: '📋 Found **' + foundCount + '/' + configuredAttrs.length + '** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nMissing: ' + missingList + '\n\nClick below to enter the first missing value:',
       embeds: [createAnalysisEmbed(recruit)],
-      components: [],
+      components: [getMissingAttrRow(recruit.id, missing[0])],
     });
   } else if (recruitName) {
     activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
@@ -514,6 +536,37 @@ export async function handleButton(interaction) {
   // analyze_pick_manual
   if (id === 'analyze_pick_manual') {
     return interaction.update({ content: 'Step 1: Select a position', components: getPositionRows('analyze') });
+  }
+
+  // fill_attr_{recruitId}_{attr} — open modal
+  if (id.startsWith('fill_attr_')) {
+    const parts     = id.replace('fill_attr_', '').split('_');
+    const recruitId = parts[0];
+    const attr      = parts.slice(1).join('_');
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_fill_' + recruitId + '_' + attr)
+      .setTitle('Enter value for ' + attr);
+
+    const input = new TextInputBuilder()
+      .setCustomId('attr_value')
+      .setLabel('Value for ' + attr + ' (50–99)')
+      .setStyle(TextInputStyle.Short)
+      .setMinLength(2)
+      .setMaxLength(2)
+      .setPlaceholder('e.g. 91')
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    return interaction.showModal(modal);
+  }
+
+  // skip_attr_{recruitId}_{attr} — skip this attribute
+  if (id.startsWith('skip_attr_')) {
+    const parts     = id.replace('skip_attr_', '').split('_');
+    const recruitId = parseInt(parts[0]);
+    const attr      = parts.slice(1).join('_');
+    return advanceMissingFill(interaction, recruitId, attr, null);
   }
 
   if (id.startsWith('analyze_pos_')) {
@@ -669,7 +722,72 @@ export async function handleButton(interaction) {
   }
 }
 
-// ── Message Handler ───────────────────────────────────────────────────────────
+// ── Shared helper: advance through missing attrs after modal or skip ──────────
+async function advanceMissingFill(interaction, recruitId, attr, value) {
+  const session = activeEdits.get(interaction.user.id);
+  if (!session || session.type !== 'filling_missing') {
+    return interaction.reply({ content: 'Session expired. Please run /analyze again.', flags: 64 });
+  }
+
+  // Save value if provided
+  if (value !== null) {
+    const { data: recruit } = await supabase.from('recruits').select('attributes').eq('id', recruitId).single();
+    const updated = { ...recruit.attributes, [attr]: value };
+    await supabase.from('recruits').update({ attributes: updated }).eq('id', recruitId);
+  }
+
+  const nextFilled = session.filled + 1;
+
+  if (nextFilled < session.missing.length) {
+    activeEdits.set(interaction.user.id, { ...session, filled: nextFilled });
+    const nextAttr = session.missing[nextFilled];
+    const remaining = session.missing.length - nextFilled;
+    return interaction.update({
+      content: (value !== null ? '✅ **' + attr + '** set to **' + value + '**.\n\n' : '⏭️ Skipped **' + attr + '**.\n\n') +
+        '**' + remaining + '** attribute' + (remaining > 1 ? 's' : '') + ' remaining. Enter value for **' + nextAttr + '**:',
+      components: [getMissingAttrRow(recruitId, nextAttr)],
+    });
+  }
+
+  // All done — go to name or confirm
+  const { data: recruit } = await supabase.from('recruits').select('*').eq('id', recruitId).single();
+  if (session.hasName) {
+    activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruitId });
+    return interaction.update({
+      content: '✅ All attributes filled! Confirm to calculate fit score:',
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [getConfirmRow(recruitId)],
+    });
+  }
+  activeEdits.set(interaction.user.id, { type: 'naming', id: recruitId });
+  return interaction.update({
+    content: '✅ All attributes filled! Reply with the **recruit\'s name** (or type `skip` to leave unnamed):',
+    embeds: [createAnalysisEmbed(recruit)],
+    components: [],
+  });
+}
+
+// ── Modal Handler ─────────────────────────────────────────────────────────────
+export async function handleModal(interaction) {
+  const id = interaction.customId;
+
+  // modal_fill_{recruitId}_{attr}
+  if (id.startsWith('modal_fill_')) {
+    const parts     = id.replace('modal_fill_', '').split('_');
+    const recruitId = parseInt(parts[0]);
+    const attr      = parts.slice(1).join('_');
+    const raw       = interaction.fields.getTextInputValue('attr_value').trim();
+    const val       = parseInt(raw);
+
+    if (isNaN(val) || val < 50 || val > 99) {
+      return interaction.reply({ content: '❌ Invalid value **' + raw + '** — must be a number between 50 and 99.', flags: 64 });
+    }
+
+    return advanceMissingFill(interaction, recruitId, attr, val);
+  }
+}
+
+
 export async function handleMessage(message) {
   if (message.author.bot) return;
 
