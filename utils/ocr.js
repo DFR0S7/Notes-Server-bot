@@ -323,7 +323,17 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       const ocrName = ABBREV_TO_OCR[attr];
       if (!ocrName) continue;
       for (let j = 0; j < lines.length; j++) {
-        const upper = lines[j].toUpperCase().replace(/[^A-Z\s]/g, '');
+        const rawUpper = lines[j].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
+        const upper = rawUpper
+          .replace(/THROWPOWER/g, 'THROW POWER')
+          .replace(/SHORTACCURACY/g, 'SHORT ACCURACY')
+          .replace(/MIDACCURACY/g, 'MEDIUM ACCURACY')
+          .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
+          .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
+          .replace(/THROWONRUN/g, 'THROW ON RUN')
+          .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
+          .replace(/BREAKSACK/g, 'BREAK SACK')
+          .replace(/\s+/g, ' ').trim();
         if (!upper.includes(ocrName.toUpperCase())) continue;
 
         // Find how many known attr names are on this line and their order
