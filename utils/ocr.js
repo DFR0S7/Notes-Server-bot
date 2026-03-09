@@ -358,6 +358,15 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
     }
   }
 
+  // Strip any remaining values under 50 — they are misreads and should
+  // be treated as missing so the manual fill prompt handles them.
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v < 50) {
+      console.log('Dropping ' + k + ':' + v + ' as likely misread — will prompt for manual fill.');
+      delete attrs[k];
+    }
+  }
+
   console.log('Parsed attributes:', attrs);
   return attrs;
 }
