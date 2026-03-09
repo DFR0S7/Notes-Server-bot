@@ -312,9 +312,10 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
   }
 
   // ── Recheck any value under 50 ────────────────────────────────────────────
-  // Only recheck attributes that appeared alone on their line (not paired).
-  // Paired lines are handled correctly by the main pass — rechecking them
-  // risks stealing the neighbor's number.
+  // Values under 50 are almost certainly misreads (CFB26 floor is ~50).
+  // For solo lines: replace with first valid number on the next line.
+  // For paired lines: only replace the suspicious slot by index, leaving the
+  // other attribute's number untouched.
   const suspicious = Object.entries(attrs).filter(([, v]) => v < 50);
   if (suspicious.length > 0) {
     console.log('Suspicious values (< 50), rechecking:', suspicious.map(([k, v]) => k + ':' + v));
@@ -325,24 +326,32 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
         const upper = lines[j].toUpperCase().replace(/[^A-Z\s]/g, '');
         if (!upper.includes(ocrName.toUpperCase())) continue;
 
-        // Count how many known attribute names appear on this line
-        const namesOnLine = ALL_NAMES.filter(n => {
-          const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          return new RegExp('\\b' + escaped + '\\b').test(upper);
-        });
+        // Find how many known attr names are on this line and their order
+        const namesOnLine = ALL_NAMES
+          .filter(n => {
+            const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp('\\b' + escaped + '\\b').test(upper);
+          })
+          .map(n => ({ name: n, pos: upper.indexOf(n) }))
+          .sort((a, b) => a.pos - b.pos);
 
-        // Only recheck if this attribute was alone on the line
-        if (namesOnLine.length !== 1) {
-          console.log('Skipping recheck for ' + attr + ' — paired line, leaving to manual fill.');
-          break;
-        }
+        // Find index of this attr in the line (0 = left, 1 = right)
+        const attrIndex = namesOnLine.findIndex(n => n.name === ocrName.toUpperCase());
 
-        // Look only at the next line, same as main pass
-        const nextLine = (lines[j + 1] || '').trim();
-        const candidates = (nextLine.match(/\d+/g) || []).map(Number).filter(n => n >= 50 && n <= 99);
-        if (candidates.length > 0) {
-          console.log('Recheck ' + attr + ': ' + attrs[attr] + ' -> ' + candidates[0]);
-          attrs[attr] = candidates[0];
+        // Get the next line numbers (with same corrections as main pass)
+        const rawNext = (lines[j + 1] || '').trim();
+        const corrected = rawNext
+          .replace(/^[A-Za-z]+(\d{2,3})\b/, '$1')
+          .replace(/(\d{2})[°.:]+/g, '$1');
+        const nextNums = (corrected.match(/\b\d{2,3}\b/g) || []).map(Number);
+
+        // The number at attrIndex should be the one for this attr
+        const candidate = nextNums[attrIndex];
+        if (candidate !== undefined && candidate >= 50 && candidate <= 99) {
+          console.log('Recheck ' + attr + ': ' + attrs[attr] + ' -> ' + candidate + ' (index ' + attrIndex + ')');
+          attrs[attr] = candidate;
+        } else {
+          console.log('Recheck ' + attr + ': no valid candidate at index ' + attrIndex + ', leaving for manual fill.');
         }
         break;
       }
