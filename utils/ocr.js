@@ -175,13 +175,15 @@ export async function performOCR(imageUrl) {
 
       const { data: allArchetypes } = await supabase.from('archetypes').select('position, archetype');
       const knownArchetypes = allArchetypes?.map(a => a.archetype) || [];
-      const VALID_POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH'];
+      const VALID_POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH','RT','LT','LG','RG','FS','SS','LEDG','REDG','SAM','WILL','MIKE'];
+      // Normalize display positions to bot positions
+      const POS_MAP = { RT: 'OT', LT: 'OT', LG: 'OG', RG: 'OG', FS: 'S', SS: 'S', LEDG: 'DE', REDG: 'DE', SAM: 'LB', WILL: 'LB', MIKE: 'LB' };
 
       for (let i = 0; i < metaLines.length; i++) {
         const upper = metaLines[i].toUpperCase();
         if (upper.includes('POSITION') && metaLines[i + 1]) {
           const pos = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
-          if (VALID_POSITIONS.includes(pos)) recruitPosition = pos;
+          if (VALID_POSITIONS.includes(pos)) recruitPosition = POS_MAP[pos] || pos;
         }
         if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
           const raw = metaLines[i + 1].trim();
@@ -252,9 +254,15 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
 
     const foundNames = targetNames.filter(name => {
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return name === 'TACKLE'
+      const matches = name === 'TACKLE'
         ? line.includes('BREAK TACKLE') ? false : line.includes('TACKLE')
         : new RegExp('\\b' + escaped + '\\b').test(line);
+      if (!matches) return false;
+      // Exclude if a longer name containing this one is also present on the line
+      const overshadowed = targetNames.some(other =>
+        other !== name && other.includes(name) && new RegExp('\\b' + other.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(line)
+      );
+      return !overshadowed;
     });
     if (foundNames.length === 0) continue;
     console.log('foundNames:', foundNames, '| nextLine:', (lines[i+1]||'').trim());
