@@ -88,16 +88,16 @@ async function start() {
   client.login(config.token);
 }
 
-const RENDER_URL =
-  process.env.RENDER_EXTERNAL_URL ||
-  (process.env.RENDER_EXTERNAL_HOSTNAME ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}` : null);
+const SELF_PING_URL = process.env.SELF_PING_URL || null;
 
-if (RENDER_URL) {
-  console.log('Self-pinger active');
+if (SELF_PING_URL) {
+  console.log('Self-pinger active:', SELF_PING_URL);
   setInterval(async () => {
-    try { await axios.get(`${RENDER_URL}/ping`, { timeout: 5000 }); }
+    try { await axios.get(`${SELF_PING_URL}/ping`, { timeout: 5000 }); }
     catch (err) { console.warn('Self-ping failed:', err.message); }
   }, 3 * 60 * 1000);
+} else {
+  console.warn('SELF_PING_URL not set — self-pinger disabled.');
 }
 
 process.on('uncaughtException', (err) => console.error('Uncaught exception:', err.message));
