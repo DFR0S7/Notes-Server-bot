@@ -84,10 +84,10 @@ export async function performOCR(imageUrl) {
   const w = metadata.width;
   const h = metadata.height;
 
-  // Crop 1: attributes box (x: 45-68%, y: 40-78%)
+  // Crop 1: attributes box (x: 45-70%, y: 40-78%)
   const boxLeft   = Math.floor(w * 0.45);
   const boxTop    = Math.floor(h * 0.40);
-  const boxWidth  = Math.floor(w * 0.23);  // 45-68%
+  const boxWidth  = Math.floor(w * 0.25);  // 45-70%
   const boxHeight = Math.floor(h * 0.38);
 
   // Crop 2: name region (x: 45-72%, y: 12-25%)
@@ -181,15 +181,25 @@ export async function performOCR(imageUrl) {
 
       for (let i = 0; i < metaLines.length; i++) {
         const upper = metaLines[i].toUpperCase();
-        if (upper.includes('POSITION') && metaLines[i + 1]) {
-          const pos = metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase();
-          if (VALID_POSITIONS.includes(pos)) recruitPosition = POS_MAP[pos] || pos;
+        if (upper.includes('POSITION')) {
+          // Try next line first, then same line after the word POSITION
+          const candidates = [];
+          if (metaLines[i + 1]) candidates.push(metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase());
+          const inline = upper.replace('POSITION', '').trim().split(/\s+/)[0];
+          if (inline) candidates.push(inline);
+          for (const pos of candidates) {
+            if (VALID_POSITIONS.includes(pos)) { recruitPosition = POS_MAP[pos] || pos; break; }
+          }
         }
-        if (upper.includes('ARCHETYPE') && metaLines[i + 1]) {
-          const raw = metaLines[i + 1].trim();
-          recruitArchetype = knownArchetypes.find(a =>
-            raw.toUpperCase().startsWith(a.toUpperCase())
-          ) || null;
+        if (upper.includes('ARCHETYPE')) {
+          const candidates = [];
+          if (metaLines[i + 1]) candidates.push(metaLines[i + 1].trim());
+          const inline = metaLines[i].replace(/ARCHETYPE/i, '').trim();
+          if (inline) candidates.push(inline);
+          for (const raw of candidates) {
+            const match = knownArchetypes.find(a => raw.toUpperCase().startsWith(a.toUpperCase()));
+            if (match) { recruitArchetype = match; break; }
+          }
         }
       }
     }
