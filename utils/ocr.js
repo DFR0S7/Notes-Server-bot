@@ -294,6 +294,10 @@ export function parseAttributes(ocrText, configuredAttrs = null) {
       .replace(/\b[Ll]h\b/gi, '74')
       .replace(/\b\[are\b/gi, '79')
       .replace(/^[A-Za-z]+(\d{2,3})\b/, '$1')   // leading letters: ED79->79
+      .replace(/\b7A\b/gi, '71')                  // known misread: 7A->71
+      .replace(/\b8A\b/gi, '81')                  // known misread: 8A->81
+      .replace(/\b9A\b/gi, '91')                  // known misread: 9A->91
+      .replace(/\bNC\b/gi, '78')                  // known misread: NC->78
       .replace(/\b921\b/g, '91')                  // known misread: 921->91
       .replace(/\b929\b/g, '99')                  // known misread: 929->99
       .replace(/\b924\b/g, '94')                  // known misread: 924->94
