@@ -4,7 +4,7 @@ import { performOCR, mapGridValues } from './utils/ocr.js';
 import {
   getPositionRows, getArchetypeRows, getConfirmRow, getDeleteRow,
   createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
-  createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit,
+  createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit, getAttributeOrder,
 } from './utils.js';
 import { activeEdits, client } from './index.js';
 
@@ -457,8 +457,19 @@ async function runAnalysis(interaction, session, position, archetype) {
     return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
   }
 
-  // Map the 10 grid values to attribute keys using the position/archetype order
-  const { attrs: attributes, missing: missingFromOCR } = mapGridValues(ocrValues, configuredAttrs);
+  // Map the 10 grid values to attribute keys using the on-screen display order
+  // (getAttributeOrder), not configuredAttrs — the grid positions are fixed by
+  // the game UI, not by what the league admin has configured ranges for.
+  const gridOrder = getAttributeOrder(position, archetype);
+  if (!gridOrder) {
+    activeEdits.delete(interaction.user.id);
+    return interaction.editReply({ content: 'Unknown position/archetype combination. Please pick manually.' });
+  }
+  const { attrs: allAttrs } = mapGridValues(ocrValues, gridOrder);
+
+  // Filter down to only the attrs the league has configured ranges for
+  const attributes     = Object.fromEntries(configuredAttrs.filter(a => a in allAttrs).map(a => [a, allAttrs[a]]));
+  const missingFromOCR = configuredAttrs.filter(a => !(a in allAttrs));
   activeEdits.delete(interaction.user.id);
 
   if (Object.keys(attributes).length === 0) {
