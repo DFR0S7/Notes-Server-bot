@@ -329,6 +329,55 @@ async function extractPositionArchetype(srcPath, w, h, archetypeList, worker) {
       }
     }
 
+    // ── Derive position from archetype when OCR position is wrong/missing ────
+    // Build an inverted map from the known ARCHETYPES constant.
+    // Archetypes shared across positions (OL trio, WR/TE Physical Route Runner)
+    // are resolved using the OCR position as a tiebreaker.
+    const ARCHETYPE_TO_POS = {
+      // QB
+      'Backfield Creator': ['QB'], 'Dual Threat': ['QB'], 'Pocket Passer': ['QB'], 'Pure Runner': ['QB'],
+      // HB — all unique
+      'Elusive Bruiser': ['HB'], 'Backfield Threat': ['HB'], 'NS Receiver': ['HB'],
+      'NS Blocker': ['HB'], 'Contact Seeker': ['HB'], 'East-West Playmaker': ['HB'],
+      // WR — Physical Route Runner shared with TE
+      'Gadget': ['WR'], 'Physical Route Runner': ['WR','TE'], 'Elusive Route Runner': ['WR'],
+      'Speedster': ['WR'], 'Contested Specialist': ['WR'], 'Gritty Possession': ['WR'], 'Route Artist': ['WR'],
+      // TE
+      'Vertical Threat': ['TE'], 'Pure Blocker': ['TE'], 'Possession': ['TE'],
+      // OL — shared across OT/OG/C
+      'Raw Strength': ['OT','OG','C'], 'Well Rounded': ['OT','OG','C'],
+      'Pass Protector': ['OT','OG','C'], 'Agile': ['OT','OG','C'],
+      // DE
+      'Speed Rusher': ['DE','DT'], 'Edge Setter': ['DE'], 'Power Rusher': ['DE','DT'],
+      // DT
+      'Pure Power': ['DT'], 'Gap Specialist': ['DT'],
+      // LB
+      'Lurker': ['LB'], 'Signal Caller': ['LB'], 'Thumper': ['LB'],
+      // CB
+      'Field': ['CB'], 'Zone': ['CB'], 'Bump': ['CB'], 'Boundary': ['CB'],
+      // S
+      'Coverage Specialist': ['S'], 'Hybrid': ['S'], 'Box': ['S'],
+    };
+
+    if (archetype) {
+      const candidates = ARCHETYPE_TO_POS[archetype];
+      if (candidates) {
+        if (candidates.length === 1) {
+          // Unambiguous — override OCR position entirely
+          if (position !== candidates[0]) {
+            console.log(`Position corrected by archetype: ${position} → ${candidates[0]} (archetype: ${archetype})`);
+          }
+          position = candidates[0];
+        } else if (!candidates.includes(position)) {
+          // Ambiguous archetype AND OCR position isn't one of the valid options
+          // Fall back to first candidate (most common)
+          console.log(`Position ambiguous for archetype "${archetype}", candidates: ${candidates}, OCR was: ${position} — using ${candidates[0]}`);
+          position = candidates[0];
+        }
+        // else: ambiguous but OCR position is valid — keep it
+      }
+    }
+
     console.log('OCR position:', position, '| archetype:', archetype);
     return { position, archetype };
   } finally {
