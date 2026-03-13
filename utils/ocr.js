@@ -201,68 +201,135 @@ async function extractName(srcPath, w, h, worker) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POSITION + ARCHETYPE EXTRACTION  (separate header region — new approach)
-// Crop: x 38–90%, y 18–30%
-// Covers both the name row ("LASTNAME [POS] | High School") and the stats
-// line ("nat:[n] | sta:[n] | Pos:[rank] [Archetype] | City").
+// POSITION + ARCHETYPE EXTRACTION
+//
+// Uses two dedicated labeled boxes that the game UI always renders:
+//   POSITION box  → x: 68–80%, y: 13–23%  reads "HB", "WR", "RT" etc.
+//   ARCHETYPE box → x: 68–82%, y: 23–32%  reads full display name
+//
+// Display names → DB names for archetypes the game shows differently:
 // ─────────────────────────────────────────────────────────────────────────────
 
+const ARCHETYPE_DISPLAY_MAP = {
+  'north south receiver': 'NS Receiver',
+  'north/south receiver': 'NS Receiver',
+  'ns receiver':          'NS Receiver',
+  'north south blocker':  'NS Blocker',
+  'north/south blocker':  'NS Blocker',
+  'ns blocker':           'NS Blocker',
+  'east west playmaker':  'East-West Playmaker',
+  'east/west playmaker':  'East-West Playmaker',
+  'backfield threat':     'Backfield Threat',
+  'backfield creator':    'Backfield Creator',
+  'elusive bruiser':      'Elusive Bruiser',
+  'contact seeker':       'Contact Seeker',
+  'physical route runner':'Physical Route Runner',
+  'elusive route runner': 'Elusive Route Runner',
+  'contested specialist': 'Contested Specialist',
+  'gritty possession':    'Gritty Possession',
+  'route artist':         'Route Artist',
+  'vertical threat':      'Vertical Threat',
+  'pure blocker':         'Pure Blocker',
+  'pure power':           'Pure Power',
+  'gap specialist':       'Gap Specialist',
+  'speed rusher':         'Speed Rusher',
+  'power rusher':         'Power Rusher',
+  'edge setter':          'Edge Setter',
+  'raw strength':         'Raw Strength',
+  'well rounded':         'Well Rounded',
+  'pass protector':       'Pass Protector',
+  'signal caller':        'Signal Caller',
+  'coverage specialist':  'Coverage Specialist',
+  'dual threat':          'Dual Threat',
+  'pocket passer':        'Pocket Passer',
+  'pure runner':          'Pure Runner',
+  'backfield creator':    'Backfield Creator',
+};
+
 async function extractPositionArchetype(srcPath, w, h, archetypeList, worker) {
-  const left   = Math.round(w * 0.38);
-  const top    = Math.round(h * 0.18);
-  const width  = Math.round(w * 0.52);
-  const height = Math.round(h * 0.12);
-  const tmpPath = join(tmpdir(), `recruit_meta_${Date.now()}.png`);
+  // ── POSITION: dedicated labeled box x=68-80%, y=13-23% ──────────────────
+  const posLeft   = Math.round(w * 0.68);
+  const posTop    = Math.round(h * 0.13);
+  const posWidth  = Math.round(w * 0.12);
+  const posHeight = Math.round(h * 0.10);
+  const tmpPos  = join(tmpdir(), `recruit_pos_${Date.now()}.png`);
+
+  // ── ARCHETYPE: dedicated labeled box x=68-82%, y=23-32% ─────────────────
+  const archLeft   = Math.round(w * 0.68);
+  const archTop    = Math.round(h * 0.23);
+  const archWidth  = Math.round(w * 0.14);
+  const archHeight = Math.round(h * 0.09);
+  const tmpArch = join(tmpdir(), `recruit_arch_${Date.now()}.png`);
 
   try {
-    await sharp(srcPath)
-      .extract({ left, top, width, height })
-      .greyscale().normalise()
-      .resize({ width: width * 3, kernel: 'cubic' })
-      .toFile(tmpPath);
+    await Promise.all([
+      sharp(srcPath)
+        .extract({ left: posLeft, top: posTop, width: posWidth, height: posHeight })
+        .greyscale().normalise()
+        .resize({ width: posWidth * 3, kernel: 'cubic' })
+        .toFile(tmpPos),
+      sharp(srcPath)
+        .extract({ left: archLeft, top: archTop, width: archWidth, height: archHeight })
+        .greyscale().normalise()
+        .resize({ width: archWidth * 3, kernel: 'cubic' })
+        .toFile(tmpArch),
+    ]);
 
     await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: '' });
-    const result = await worker.recognize(tmpPath);
-    const lines  = result.data.text
-      .split('\n')
-      .map(l => l.replace(/\|/g, ' ').replace(/\s+/g, ' ').trim())
+
+    const [posResult, archResult] = await Promise.all([
+      worker.recognize(tmpPos),
+      worker.recognize(tmpArch),
+    ]);
+
+    // ── Parse position ───────────────────────────────────────────────────────
+    // Skip known label words; take first token that matches a position code
+    const SKIP_POS = /^(POSITION|CLASS|HIGH|SCHOOL|ARCHETYPE|HOMETOWN|NAT|STA|POS)$/;
+    let position = null;
+    for (const line of posResult.data.text.split('\n')) {
+      for (const tok of line.split(/\s+/)) {
+        const clean = tok.replace(/[^A-Za-z]/g, '').toUpperCase();
+        if (!clean || SKIP_POS.test(clean)) continue;
+        const p = matchPosition(clean);
+        if (p) { position = p; break; }
+      }
+      if (position) break;
+    }
+
+    // ── Parse archetype ──────────────────────────────────────────────────────
+    // Strip label words, try progressively shorter word prefixes so trailing
+    // city / noise tokens don't prevent matching "North/South Receiver Rio Ra ne"
+    const SKIP_ARCH = /^(ARCHETYPE|HOMETOWN|HIGH|SCHOOL|CLASS|POSITION|NAT|STA|POS|TC|TOP)$/;
+    let archetype = null;
+    const archLines = archResult.data.text.split('\n')
+      .map(l => l.replace(/\|/g, ' ').trim())
       .filter(l => l.length > 1);
 
-    console.log('Meta OCR lines:', lines);
+    outer:
+    for (const line of archLines) {
+      const words = line.split(/\s+/).filter(w => !SKIP_ARCH.test(w.toUpperCase()));
+      if (!words.length) continue;
 
-    let position  = null;
-    let archetype = null;
+      // Try decreasing prefix lengths so trailing city noise is ignored
+      for (let end = words.length; end >= 1; end--) {
+        const candidate = words.slice(0, end).join(' ').trim();
+        if (!candidate) continue;
 
-    for (const line of lines) {
-      // ── Position: first token on any line that matches a known position ──
-      if (!position) {
-        for (const tok of line.split(/\s+/)) {
-          const p = matchPosition(tok);
-          if (p) { position = p; break; }
-        }
+        // Display name map first (handles North/South Receiver, NS Blocker etc.)
+        const mapped = ARCHETYPE_DISPLAY_MAP[candidate.toLowerCase()];
+        if (mapped) { archetype = mapped; break outer; }
+
+        // Fuzzy match against DB + fallback list
+        const match = matchArchetype(candidate, archetypeList);
+        if (match) { archetype = match; break outer; }
       }
-
-      // ── Archetype: "Pos: [rank] [Archetype words]" pattern ───────────────
-      if (!archetype) {
-        const m = line.match(/[Pp]os\s*[:.]?\s*\d+\s+([\w\s]+)/);
-        if (m) {
-          const candidate = m[1].split(/[|,]/)[0].trim();
-          archetype = matchArchetype(candidate, archetypeList);
-        }
-      }
-
-      // ── Archetype fallback: match anywhere on the line ───────────────────
-      if (!archetype) {
-        archetype = matchArchetype(line, archetypeList);
-      }
-
-      if (position && archetype) break;
     }
 
     console.log('OCR position:', position, '| archetype:', archetype);
     return { position, archetype };
   } finally {
-    try { unlinkSync(tmpPath); } catch {}
+    try { unlinkSync(tmpPos);  } catch {}
+    try { unlinkSync(tmpArch); } catch {}
   }
 }
 
