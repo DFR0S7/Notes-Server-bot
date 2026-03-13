@@ -6,399 +6,374 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { supabase } from '../supabase.js';
 
-// Maps OCR text (uppercase) → abbreviation used in config
-const NAME_MAP = {
-  'AWARENESS':            'AWR',
-  'SPEED':                'SPD',
-  'ACCELERATION':         'ACC',
-  'AGILITY':              'AGI',
-  'STRENGTH':             'STR',
-  'JUMP':                 'JMP',
-  'STAMINA':              'STA',
-  'INJURY':               'INJ',
-  'THROW POWER':          'THP',
-  'SHORT ACCURACY':       'SAC',
-  'MEDIUM ACCURACY':      'MAC',
-  'DEEP ACCURACY':        'DAC',
-  'THROW ON RUN':         'TOR',
-  'UNDER PRESSURE':       'TUP',
-  'PLAY ACTION':          'PAC',
-  'BREAK SACK':           'BSK',
-  'CARRYING':             'CAR',
-  'CATCHING':             'CTH',
-  'CATCH IN TRAFFIC':     'CIT',
-  'SPECTACULAR CATCH':    'SPC',
-  'ROUTE RUNNING':        'RTE',
-  'SHORT ROUTE':          'SRR',
-  'MED ROUTE':            'MRR',
-  'DEEP ROUTE':           'DRR',
-  'RELEASE':              'RLS',
-  'BREAK TACKLE':         'BTK',
-  'TRUCKING':             'TRK',
-  'ELUSIVENESS':          'ELU',
-  'BC VISION':            'BCV',
-  'SPIN MOVE':            'SPM',
-  'JUKE MOVE':            'JKM',
-  'CHANGE OF DIRECTION':  'COD',
-  'STIFF ARM':            'SFA',
-  'TACKLE':               'TAK',
-  'HIT POWER':            'HPW',
-  'PURSUIT':              'PUR',
-  'PLAY RECOGNITION':     'PRC',
-  'MAN COVERAGE':         'MCV',
-  'ZONE COVERAGE':        'ZCV',
-  'PRESS':                'PRS',
-  'POWER MOVES':          'PMV',
-  'FINESSE MOVES':        'FMV',
-  'BLOCK SHEDDING':       'BSH',
-  'PASS BLOCK':           'PBK',
-  'RUN BLOCK':            'RBK',
-  'PASS BLOCK POWER':     'PBP',
-  'PASS BLOCK FINESSE':   'PBF',
-  'RUN BLOCK POWER':      'RBP',
-  'RUN BLOCK FINESSE':    'RBF',
-  'LEAD BLOCK':           'LBK',
-  'IMPACT BLOCKING':      'IBL',
-  'KICK POWER':           'KPW',
-  'KICK ACCURACY':        'KAC',
-  'KICK RETURN':          'KRT',
+// ─────────────────────────────────────────────────────────────────────────────
+// GRID CONSTANTS  (calibrated against 3840×2160 screenshots, multiple teams)
+// All values are fractions so they scale to any resolution automatically.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GRID_L_X1    = 0.465;   // left column  start
+const GRID_L_X2    = 0.585;   // left column  end
+const GRID_R_X1    = 0.626;   // right column start
+const GRID_R_X2    = 0.754;   // right column end
+
+// Number row y-centres — same for both left and right columns
+const GRID_ROW_Y   = [0.439, 0.491, 0.552, 0.617, 0.683];
+const GRID_ROW_HALF = 0.018;  // crop window = centre ± 1.8% height
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POSITION / ARCHETYPE CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VALID_POSITIONS = [
+  'QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH',
+  'RT','LT','LG','RG','FS','SS','LEDG','REDG','SAM','WILL','MIKE',
+];
+
+const POS_MAP = {
+  RT:'OT', LT:'OT', LG:'OG', RG:'OG',
+  FS:'S',  SS:'S',
+  LEDG:'DE', REDG:'DE',
+  SAM:'LB', WILL:'LB', MIKE:'LB',
 };
 
-const ALL_NAMES = Object.keys(NAME_MAP);
+const FALLBACK_ARCHETYPES = [
+  'Backfield Creator','Dual Threat','Pocket Passer','Pure Runner',
+  'Elusive Bruiser','Backfield Threat','NS Receiver','NS Blocker',
+  'Contact Seeker','East-West Playmaker',
+  'Gadget','Physical Route Runner','Elusive Route Runner','Speedster',
+  'Contested Specialist','Gritty Possession','Route Artist',
+  'Vertical Threat','Pure Blocker','Possession',
+  'Raw Strength','Well Rounded','Pass Protector','Agile',
+  'Speed Rusher','Edge Setter','Power Rusher',
+  'Pure Power','Gap Specialist',
+  'Lurker','Signal Caller','Thumper',
+  'Field','Zone','Bump','Boundary',
+  'Coverage Specialist','Hybrid','Box',
+];
 
-// Reverse map: abbreviation → OCR name (for filtering by config)
-const ABBREV_TO_OCR = Object.fromEntries(
-  Object.entries(NAME_MAP).map(([ocr, abbrev]) => [abbrev, ocr])
-);
+// ─────────────────────────────────────────────────────────────────────────────
+// FUZZY AUTOCOMPLETE HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-export async function performOCR(imageUrl) {
-  const tmpRaw  = join(tmpdir(), 'recruit_raw_'  + Date.now() + '.png');
-  const tmpBox  = join(tmpdir(), 'recruit_box_'  + Date.now() + '.png');
-  const tmpName = join(tmpdir(), 'recruit_name_' + Date.now() + '.png');
-  const tmpMeta = join(tmpdir(), 'recruit_meta_' + Date.now() + '.png');
+function normalise(str) {
+  return str.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
 
-  const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
-  writeFileSync(tmpRaw, Buffer.from(response.data));
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
 
-  const metadata = await sharp(tmpRaw).metadata();
-  const w = metadata.width;
-  const h = metadata.height;
+/**
+ * Find the best match for `raw` in `list`.
+ * Priority: exact → starts-with → contains → Levenshtein ≤ maxDist
+ */
+function bestMatch(raw, list, maxDist = 3) {
+  const norm = normalise(raw);
+  if (!norm || norm.length < 2) return null;
 
-  // Crop 1: attributes box (x: 45-70%, y: 40-78%)
-  const boxLeft   = Math.floor(w * 0.45);
-  const boxTop    = Math.floor(h * 0.40);
-  const boxWidth  = Math.floor(w * 0.25);  // 45-70%
-  const boxHeight = Math.floor(h * 0.38);
+  const exact = list.find(c => normalise(c) === norm);
+  if (exact) return exact;
 
-  // Crop 2: name region (x: 45-72%, y: 12-25%)
+  const starts = list.filter(c => normalise(c).startsWith(norm) || norm.startsWith(normalise(c)));
+  if (starts.length) return starts.sort((a, b) => b.length - a.length)[0];
+
+  const contains = list.filter(c => {
+    const cn = normalise(c);
+    return norm.includes(cn) || cn.includes(norm);
+  });
+  if (contains.length) return contains.sort((a, b) => b.length - a.length)[0];
+
+  if (norm.length <= 20) {
+    let best = null, bestD = maxDist + 1;
+    for (const c of list) {
+      const d = levenshtein(norm, normalise(c));
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    if (best) return best;
+  }
+
+  return null;
+}
+
+function matchPosition(token) {
+  const t = (token || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!t) return null;
+  if (VALID_POSITIONS.includes(t)) return POS_MAP[t] || t;
+  // Fuzzy only for short tokens (position codes are ≤5 chars)
+  if (t.length <= 5) {
+    const m = bestMatch(t, VALID_POSITIONS, 1);
+    if (m) return POS_MAP[m] || m;
+  }
+  return null;
+}
+
+function matchArchetype(raw, list) {
+  return bestMatch(raw, list);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GRID NUMBER EXTRACTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
+  const left   = Math.round(w * x1);
+  const top    = Math.max(0, Math.round(h * (yC - halfH)));
+  const width  = Math.round(w * (x2 - x1));
+  const height = Math.min(h - top, Math.round(h * halfH * 2));
+  const tmpPath = join(tmpdir(), `recruit_cell_${suffix}_${Date.now()}.png`);
+
+  await sharp(srcPath)
+    .extract({ left, top, width, height })
+    .greyscale()
+    .threshold(100)   // bright number text survives; dark bg becomes black
+    .negate()         // flip → black text on white background for Tesseract
+    .resize({ width: width * 5, kernel: 'nearest' })
+    .toFile(tmpPath);
+
+  return tmpPath;
+}
+
+async function ocrCell(worker, imgPath) {
+  const result = await worker.recognize(imgPath);
+  const raw = result.data.text.replace(/\s+/g, '').replace(/[^0-9]/g, '');
+
+  for (const m of (raw.match(/\d{2,3}/g) || [])) {
+    const n = parseInt(m);
+    if (n >= 50 && n <= 99) return n;
+    // 3-digit rescue: try last-two then first+last
+    if (m.length === 3) {
+      const lastTwo   = parseInt(m[1] + m[2]);
+      const firstLast = parseInt(m[0] + m[2]);
+      if (lastTwo   >= 50 && lastTwo   <= 99) return lastTwo;
+      if (firstLast >= 50 && firstLast <= 99) return firstLast;
+    }
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NAME EXTRACTION  (original working logic — untouched)
+// Crop: x 45–72%, y 12–25%
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function extractName(srcPath, w, h, worker) {
   const nameLeft   = Math.floor(w * 0.45);
   const nameTop    = Math.floor(h * 0.12);
   const nameWidth  = Math.floor(w * 0.27);
   const nameHeight = Math.floor(h * 0.13);
 
-  const nameValid = nameWidth >= 10 && nameHeight >= 10;
+  if (nameWidth < 10 || nameHeight < 10) return null;
 
-  // Crop 3: position/archetype region (x: 68-85%, y: 12-28%)
-  const metaLeft   = Math.floor(w * 0.68);
-  const metaTop    = Math.floor(h * 0.12);
-  const metaWidth  = Math.floor(w * 0.17);
-  const metaHeight = Math.floor(h * 0.16);
-  const metaValid  = metaWidth >= 10 && metaHeight >= 10;
-
-  const cropPromises = [
-    sharp(tmpRaw)
-      .extract({ left: boxLeft, top: boxTop, width: boxWidth, height: boxHeight })
-      .greyscale().normalise()
-      .resize({ width: boxWidth * 2, kernel: 'cubic' })
-      .toFile(tmpBox),
-  ];
-
-  if (nameValid) {
-    cropPromises.push(
-      sharp(tmpRaw)
-        .extract({ left: nameLeft, top: nameTop, width: nameWidth, height: nameHeight })
-        .greyscale().normalise()
-        .resize({ width: nameWidth * 2, kernel: 'cubic' })
-        .toFile(tmpName)
-    );
-  }
-
-  if (metaValid) {
-    cropPromises.push(
-      sharp(tmpRaw)
-        .extract({ left: metaLeft, top: metaTop, width: metaWidth, height: metaHeight })
-        .greyscale().normalise()
-        .resize({ width: metaWidth * 2, kernel: 'cubic' })
-        .toFile(tmpMeta)
-    );
-  }
-
-  await Promise.all(cropPromises);
-
-  const worker = await createWorker('eng');
-  await worker.setParameters({
-    tessedit_pageseg_mode: '6',
-    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz',
-  });
+  const tmpName = join(tmpdir(), `recruit_name_${Date.now()}.png`);
   try {
-    const [attrResult, nameResult, metaResult] = await Promise.all([
-      worker.recognize(tmpBox),
-      nameValid ? worker.recognize(tmpName) : Promise.resolve(null),
-      metaValid ? worker.recognize(tmpMeta) : Promise.resolve(null),
-    ]);
+    await sharp(srcPath)
+      .extract({ left: nameLeft, top: nameTop, width: nameWidth, height: nameHeight })
+      .greyscale().normalise()
+      .resize({ width: nameWidth * 2, kernel: 'cubic' })
+      .toFile(tmpName);
 
-    const text = attrResult.data.text;
-    console.log('OCR raw output:\n', text);
+    await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: '' });
+    const nameResult = await worker.recognize(tmpName);
 
-    // Extract name
     const SKIP_WORDS = /^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|DE|DT|LB|CB|SS|FS)$/;
-    const recruitName = nameResult
-      ? (nameResult.data.text
-          .split('\n')
-          .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
-          .map(l => l.split(/\s+/)[0])
-          .filter(w => w && /^[A-Z][A-Za-z]{2,}$/.test(w) && !SKIP_WORDS.test(w))
-          .slice(0, 2)
-          .join(' ') || null)
-      : null;
+    const recruitName = nameResult.data.text
+      .split('\n')
+      .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
+      .map(l => l.split(/\s+/)[0])
+      .filter(w => w && /^[A-Z][A-Za-z]{2,}$/.test(w) && !SKIP_WORDS.test(w))
+      .slice(0, 2)
+      .join(' ') || null;
+
     console.log('OCR name:', recruitName);
-
-    // Extract position and archetype from meta region
-    let recruitPosition = null;
-    let recruitArchetype = null;
-
-    if (metaResult) {
-      const metaLines = metaResult.data.text
-        .split('\n')
-        .map(l => l.replace(/[|]/g, '').trim())
-        .filter(l => l.length > 0);
-
-      const { data: allArchetypes } = await supabase.from('archetypes').select('position, archetype');
-      const knownArchetypes = allArchetypes?.map(a => a.archetype) || [];
-      const VALID_POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH','RT','LT','LG','RG','FS','SS','LEDG','REDG','SAM','WILL','MIKE'];
-      // Normalize display positions to bot positions
-      const POS_MAP = { RT: 'OT', LT: 'OT', LG: 'OG', RG: 'OG', FS: 'S', SS: 'S', LEDG: 'DE', REDG: 'DE', SAM: 'LB', WILL: 'LB', MIKE: 'LB' };
-
-      for (let i = 0; i < metaLines.length; i++) {
-        const upper = metaLines[i].toUpperCase();
-        if (upper.includes('POSITION')) {
-          // Try next line first, then same line after the word POSITION
-          const candidates = [];
-          if (metaLines[i + 1]) candidates.push(metaLines[i + 1].trim().split(/\s+/)[0].toUpperCase());
-          const inline = upper.replace('POSITION', '').trim().split(/\s+/)[0];
-          if (inline) candidates.push(inline);
-          for (const pos of candidates) {
-            if (VALID_POSITIONS.includes(pos)) { recruitPosition = POS_MAP[pos] || pos; break; }
-          }
-        }
-        if (upper.includes('ARCHETYPE')) {
-          const candidates = [];
-          if (metaLines[i + 1]) candidates.push(metaLines[i + 1].trim());
-          const inline = metaLines[i].replace(/ARCHETYPE/i, '').trim();
-          if (inline) candidates.push(inline);
-          for (const raw of candidates) {
-            const match = knownArchetypes.find(a => raw.toUpperCase().startsWith(a.toUpperCase()));
-            if (match) { recruitArchetype = match; break; }
-          }
-        }
-      }
-    }
-    console.log('OCR position:', recruitPosition, '| archetype:', recruitArchetype);
-
-    return { text, name: recruitName, position: recruitPosition, archetype: recruitArchetype };
+    return recruitName;
   } finally {
-    await worker.terminate();
-    try { unlinkSync(tmpRaw);  } catch {}
-    try { unlinkSync(tmpBox);  } catch {}
     try { unlinkSync(tmpName); } catch {}
-    try { unlinkSync(tmpMeta); } catch {}
   }
 }
 
-export function parseAttributes(ocrText, configuredAttrs = null) {
-  const attrs = {};
-  const lines  = ocrText.split('\n').map(l => l.trim()).filter(Boolean);
+// ─────────────────────────────────────────────────────────────────────────────
+// POSITION + ARCHETYPE EXTRACTION  (separate header region — new approach)
+// Crop: x 38–90%, y 18–30%
+// Covers both the name row ("LASTNAME [POS] | High School") and the stats
+// line ("nat:[n] | sta:[n] | Pos:[rank] [Archetype] | City").
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const targetNames = (configuredAttrs
-    ? configuredAttrs.map(a => ABBREV_TO_OCR[a]).filter(Boolean)
-    : ALL_NAMES).sort((a, b) => b.length - a.length);
+async function extractPositionArchetype(srcPath, w, h, archetypeList, worker) {
+  const left   = Math.round(w * 0.38);
+  const top    = Math.round(h * 0.18);
+  const width  = Math.round(w * 0.52);
+  const height = Math.round(h * 0.12);
+  const tmpPath = join(tmpdir(), `recruit_meta_${Date.now()}.png`);
 
-  console.log('configuredAttrs:', configuredAttrs);
-  console.log('targetNames:', targetNames);
+  try {
+    await sharp(srcPath)
+      .extract({ left, top, width, height })
+      .greyscale().normalise()
+      .resize({ width: width * 3, kernel: 'cubic' })
+      .toFile(tmpPath);
 
-  for (let i = 0; i < lines.length; i++) {
-    const raw  = lines[i].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
-    const line = raw
-      .replace(/THROWPOWER/g, 'THROW POWER')
-      .replace(/SHORTACCURACY/g, 'SHORT ACCURACY')
-      .replace(/MIDACCURACY/g, 'MEDIUM ACCURACY')
-      .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
-      .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
-      .replace(/THROW\s?ON\s?RUN/g, 'THROW ON RUN')
-      .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
-      .replace(/PLAYACTION/g, 'PLAY ACTION')
-      .replace(/BREAKSACK/g, 'BREAK SACK')
-      .replace(/CATCHINTRAFFIC/g, 'CATCH IN TRAFFIC')
-      .replace(/SPECTACULARCATCH/g, 'SPECTACULAR CATCH')
-      .replace(/CHANGEOFDIR\w*/g, 'CHANGE OF DIRECTION')
-      .replace(/BLOCKSHED\w*/g, 'BLOCK SHEDDING')
-      .replace(/PLAYRECOG\w*/g, 'PLAY RECOGNITION')
-      .replace(/PASSBLOCKPOWER/g, 'PASS BLOCK POWER')
-      .replace(/PASSBLOCKFINESSE/g, 'PASS BLOCK FINESSE')
-      .replace(/RUNBLOCKPOWER/g, 'RUN BLOCK POWER')
-      .replace(/RUNBLOCKFINESSE/g, 'RUN BLOCK FINESSE')
-      .replace(/PASSBLOCK(?!ING)\b/g, 'PASS BLOCK')
-      .replace(/RUNBLOCK(?!ING)\b/g, 'RUN BLOCK')
-      .replace(/IMPACTBLOCKING/g, 'IMPACT BLOCKING')
-      .replace(/MANCOVERAGE/g, 'MAN COVERAGE')
-      .replace(/ZONECOVERAGE/g, 'ZONE COVERAGE')
-      .replace(/BREAKTACKLE/gi, 'BREAK TACKLE')
-      .replace(/JUKEMOVE/gi, 'JUKE MOVE')
-      .replace(/SPINMOVE/gi, 'SPIN MOVE')
-      .replace(/BCVISION/gi, 'BC VISION')
-      .replace(/SHORTROUTE/g, 'SHORT ROUTE')
-      .replace(/MEDROUTE/g, 'MED ROUTE')
-      .replace(/DEEPROUTE/g, 'DEEP ROUTE')
-      .replace(/\s+/g, ' ')
-      .trim();
+    await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: '' });
+    const result = await worker.recognize(tmpPath);
+    const lines  = result.data.text
+      .split('\n')
+      .map(l => l.replace(/\|/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter(l => l.length > 1);
 
-    const foundNames = targetNames.filter(name => {
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const matches = name === 'TACKLE'
-        ? line.includes('BREAK TACKLE') ? false : line.includes('TACKLE')
-        : new RegExp('\\b' + escaped + '\\b').test(line);
-      if (!matches) return false;
-      // Exclude if a longer name containing this one is also present on the line
-      const overshadowed = targetNames.some(other =>
-        other !== name && other.includes(name) && new RegExp('\\b' + other.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(line)
-      );
-      return !overshadowed;
-    });
-    if (foundNames.length === 0) continue;
-    console.log('foundNames:', foundNames, '| nextLine:', (lines[i+1]||'').trim());
+    console.log('Meta OCR lines:', lines);
 
-    // Try next line for numbers, fall back to inline numbers
-    // Correct known OCR misreads across different team color schemes
-    const rawNext   = (lines[i + 1] || '').trim();
-    const corrected = rawNext
-      .replace(/\bEb\b/gi, '91')
-      .replace(/\beb\s+et\b/gi, '91')
-      .replace(/\boT\b/gi, '91')
-      .replace(/\blg\b/gi, '78')
-      .replace(/\bIg\b/gi, '78')
-      .replace(/^8$/, '84')
-      .replace(/\bBY\b/gi, '81')
-      .replace(/\bELLE\b/gi, '74')
-      .replace(/\bBOR\b/gi, '70')
-      .replace(/\bSerle\b/gi, '70')
-      .replace(/\b[Ll]h\b/gi, '74')
-      .replace(/\b\[are\b/gi, '79')
-      .replace(/^[A-Za-z]+(\d{2,3})\b/, '$1')   // leading letters: ED79->79
-      .replace(/\b7A\b/gi, '71')                  // known misread: 7A->71
-      .replace(/\b8A\b/gi, '81')                  // known misread: 8A->81
-      .replace(/\b9A\b/gi, '91')                  // known misread: 9A->91
-      .replace(/\bNC\b/gi, '78')                  // known misread: NC->78
-      .replace(/\b921\b/g, '91')                  // known misread: 921->91
-      .replace(/\b929\b/g, '99')                  // known misread: 929->99
-      .replace(/\b924\b/g, '94')                  // known misread: 924->94
-      .replace(/\b(\d)\d(\d)\b/g, (m, a, b) => {  // 3-digit where first+last make sense: 929->99, 818->81
-        const twoDigit = parseInt(a + b);
-        return (twoDigit >= 40 && twoDigit <= 99) ? String(twoDigit) : m;
-      })
-      .replace(/(\d{2})[°.:]+/g, '$1');           // trailing punctuation on numbers
-    const nextNums   = corrected.match(/\b\d{2,3}\b/g);
-    const cleanCurrent = lines[i].replace(/(\d{2,3})[°.:]+/, '$1');
-    const inlineNums = cleanCurrent.match(/\b\d{2,3}\b/g);
-    // If next line gave no valid numbers, peek two lines ahead
-    const nextLine2  = (lines[i + 2] || '').trim().replace(/^[A-Za-z]+(\d{2,3})$/, '$1').replace(/^(\d{2,3})[^0-9].*$/, '$1');
-    const peekNums   = nextLine2.match(/\b\d{2,3}\b/g);
-    const numbers    = (nextNums && nextNums.length > 0) ? nextNums
-                     : (inlineNums && inlineNums.length > 0) ? inlineNums
-                     : peekNums;
-    if (!numbers) continue;
+    let position  = null;
+    let archetype = null;
 
-    const sortedNames = foundNames
-      .map(name => ({ name, pos: line.indexOf(name) }))
-      .sort((a, b) => a.pos - b.pos);
-
-    sortedNames.forEach((entry, idx) => {
-      if (numbers[idx] !== undefined) {
-        const value = parseInt(numbers[idx]);
-        if (value >= 1 && value <= 99) {
-          attrs[NAME_MAP[entry.name]] = value;
+    for (const line of lines) {
+      // ── Position: first token on any line that matches a known position ──
+      if (!position) {
+        for (const tok of line.split(/\s+/)) {
+          const p = matchPosition(tok);
+          if (p) { position = p; break; }
         }
       }
-    });
 
-    i++;
+      // ── Archetype: "Pos: [rank] [Archetype words]" pattern ───────────────
+      if (!archetype) {
+        const m = line.match(/[Pp]os\s*[:.]?\s*\d+\s+([\w\s]+)/);
+        if (m) {
+          const candidate = m[1].split(/[|,]/)[0].trim();
+          archetype = matchArchetype(candidate, archetypeList);
+        }
+      }
+
+      // ── Archetype fallback: match anywhere on the line ───────────────────
+      if (!archetype) {
+        archetype = matchArchetype(line, archetypeList);
+      }
+
+      if (position && archetype) break;
+    }
+
+    console.log('OCR position:', position, '| archetype:', archetype);
+    return { position, archetype };
+  } finally {
+    try { unlinkSync(tmpPath); } catch {}
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Download image, run grid OCR for the 10 attribute numbers, and extract
+ * name / position / archetype from the card header.
+ *
+ * Returns:
+ *   values    – [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]  number|null per cell
+ *   name      – recruit name string or null
+ *   position  – canonical position string or null
+ *   archetype – archetype string or null
+ */
+export async function performOCR(imageUrl) {
+  const tmpRaw    = join(tmpdir(), `recruit_raw_${Date.now()}.png`);
+  const cellPaths = new Array(10).fill(null);
+
+  const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
+  writeFileSync(tmpRaw, Buffer.from(response.data));
+
+  const { width: w, height: h } = await sharp(tmpRaw).metadata();
+  console.log(`Image: ${w}×${h}`);
+
+  // Build 10 cell crops concurrently: [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]
+  const cropJobs = [];
+  for (let row = 0; row < 5; row++) {
+    const yC = GRID_ROW_Y[row];
+    cropJobs.push({ idx: row*2,     x1: GRID_L_X1, x2: GRID_L_X2, yC, suffix: `r${row+1}L` });
+    cropJobs.push({ idx: row*2 + 1, x1: GRID_R_X1, x2: GRID_R_X2, yC, suffix: `r${row+1}R` });
   }
 
-  // ── Recheck any value under 50 ────────────────────────────────────────────
-  // Values under 50 are almost certainly misreads (CFB26 floor is ~50).
-  // For solo lines: replace with first valid number on the next line.
-  // For paired lines: only replace the suspicious slot by index, leaving the
-  // other attribute's number untouched.
-  const suspicious = Object.entries(attrs).filter(([, v]) => v < 50);
-  if (suspicious.length > 0) {
-    console.log('Suspicious values (< 50), rechecking:', suspicious.map(([k, v]) => k + ':' + v));
-    for (const [attr] of suspicious) {
-      const ocrName = ABBREV_TO_OCR[attr];
-      if (!ocrName) continue;
-      for (let j = 0; j < lines.length; j++) {
-        const rawUpper = lines[j].toUpperCase().replace(/[^A-Z\s]/g, '').trim();
-        const upper = rawUpper
-          .replace(/THROWPOWER/g, 'THROW POWER')
-          .replace(/SHORTACCURACY/g, 'SHORT ACCURACY')
-          .replace(/MIDACCURACY/g, 'MEDIUM ACCURACY')
-          .replace(/MEDIUMACCURACY/g, 'MEDIUM ACCURACY')
-          .replace(/DEEPACCURACY/g, 'DEEP ACCURACY')
-          .replace(/THROWONRUN/g, 'THROW ON RUN')
-          .replace(/UNDERPRESSURE/g, 'UNDER PRESSURE')
-          .replace(/BREAKSACK/g, 'BREAK SACK')
-          .replace(/\s+/g, ' ').trim();
-        if (!upper.includes(ocrName.toUpperCase())) continue;
-
-        // Find how many known attr names are on this line and their order
-        const namesOnLine = ALL_NAMES
-          .filter(n => {
-            const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp('\\b' + escaped + '\\b').test(upper);
-          })
-          .map(n => ({ name: n, pos: upper.indexOf(n) }))
-          .sort((a, b) => a.pos - b.pos);
-
-        // Find index of this attr in the line (0 = left, 1 = right)
-        const attrIndex = namesOnLine.findIndex(n => n.name === ocrName.toUpperCase());
-
-        // Get the next line numbers (with same corrections as main pass)
-        const rawNext = (lines[j + 1] || '').trim();
-        const corrected = rawNext
-          .replace(/^[A-Za-z]+(\d{2,3})\b/, '$1')
-          .replace(/(\d{2})[°.:]+/g, '$1');
-        const nextNums = (corrected.match(/\b\d{2,3}\b/g) || []).map(Number);
-
-        // The number at attrIndex should be the one for this attr
-        const candidate = nextNums[attrIndex];
-        if (candidate !== undefined && candidate >= 50 && candidate <= 99) {
-          console.log('Recheck ' + attr + ': ' + attrs[attr] + ' -> ' + candidate + ' (index ' + attrIndex + ')');
-          attrs[attr] = candidate;
-        } else {
-          console.log('Recheck ' + attr + ': no valid candidate at index ' + attrIndex + ', leaving for manual fill.');
-        }
-        break;
+  await Promise.allSettled(
+    cropJobs.map(async ({ idx, x1, x2, yC, suffix }) => {
+      try {
+        cellPaths[idx] = await cropNumberCell(tmpRaw, x1, x2, yC, GRID_ROW_HALF, w, h, suffix);
+      } catch (e) {
+        console.error(`Cell crop ${suffix} failed:`, e.message);
       }
+    })
+  );
+
+  // Fetch archetype list from DB; merge with fallback
+  const { data: dbArchetypes } = await supabase.from('archetypes').select('archetype');
+  const dbList = dbArchetypes?.map(a => a.archetype) || [];
+  const archetypeList = [...new Set([...dbList, ...FALLBACK_ARCHETYPES])];
+
+  // Single worker for all OCR tasks
+  const worker = await createWorker('eng');
+  await worker.setParameters({
+    tessedit_pageseg_mode: '8',
+    tessedit_char_whitelist: '0123456789',
+  });
+
+  let values, name = null, position = null, archetype = null;
+
+  try {
+    // 1. OCR the 10 number cells
+    const ocrResults = await Promise.allSettled(
+      cellPaths.map(p => p ? ocrCell(worker, p) : Promise.resolve(null))
+    );
+    values = ocrResults.map(r => r.status === 'fulfilled' ? r.value : null);
+    console.log('Grid values [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]:', values);
+
+    // 2. Name — original crop + parse logic, completely separate
+    name = await extractName(tmpRaw, w, h, worker);
+
+    // 3. Position + archetype — dedicated header region, fuzzy autocomplete
+    ({ position, archetype } = await extractPositionArchetype(
+      tmpRaw, w, h, archetypeList, worker
+    ));
+
+  } finally {
+    await worker.terminate();
+    try { unlinkSync(tmpRaw); } catch {}
+    for (const p of cellPaths) if (p) try { unlinkSync(p); } catch {}
+  }
+
+  return { values, name, position, archetype };
+}
+
+/**
+ * Map the 10 grid values to a keyed attribute object using the given order.
+ *
+ * attrOrder index → values index:
+ *   0=L1, 1=R1, 2=L2, 3=R2, 4=L3, 5=R3, 6=L4, 7=R4, 8=L5, 9=R5
+ *
+ * Returns { attrs, missing } where missing lists keys with unreadable values
+ * so the manual fill prompt can handle them.
+ */
+export function mapGridValues(values, attrOrder) {
+  if (!attrOrder || attrOrder.length !== 10 || !values) {
+    return { attrs: {}, missing: attrOrder || [] };
+  }
+
+  const attrs   = {};
+  const missing = [];
+
+  for (let i = 0; i < 10; i++) {
+    const key = attrOrder[i];
+    const val = values[i];
+    if (typeof val === 'number' && val >= 50 && val <= 99) {
+      attrs[key] = val;
+    } else {
+      missing.push(key);
     }
   }
 
-  // Strip any remaining values under 50 — they are misreads and should
-  // be treated as missing so the manual fill prompt handles them.
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v < 50) {
-      console.log('Dropping ' + k + ':' + v + ' as likely misread — will prompt for manual fill.');
-      delete attrs[k];
-    }
-  }
-
-  console.log('Parsed attributes:', attrs);
-  return attrs;
+  console.log('mapGridValues → attrs:', attrs, '| missing:', missing);
+  return { attrs, missing };
 }
