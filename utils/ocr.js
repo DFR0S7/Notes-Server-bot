@@ -434,7 +434,11 @@ export async function performOCR(imageUrl) {
   const archetypeList = [...new Set([...dbList, ...FALLBACK_ARCHETYPES])];
 
   // Single worker for all OCR tasks
-  const worker = await createWorker('eng');
+  const worker = await createWorker('eng', 1, {
+    // Suppress Tesseract internal warnings (too-small regions, unrecognizable lines)
+    logger: () => {},
+    errorHandler: () => {},
+  });
   await worker.setParameters({
     tessedit_pageseg_mode: '8',
     tessedit_char_whitelist: '0123456789',
