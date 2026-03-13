@@ -11,13 +11,17 @@ import { supabase } from '../supabase.js';
 // All values are fractions so they scale to any resolution automatically.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GRID_L_X1    = 0.465;   // left column  start
-const GRID_L_X2    = 0.585;   // left column  end
-const GRID_R_X1    = 0.626;   // right column start
-const GRID_R_X2    = 0.754;   // right column end
+// X bounds target ONLY the number glyphs, not the attribute label text.
+// Verified pixel-level against 8186.jpg (Lawrence HB, Clemson).
+const GRID_L_X1    = 0.526;   // left column  start
+const GRID_L_X2    = 0.556;   // left column  end
+const GRID_R_X1    = 0.630;   // right column start
+const GRID_R_X2    = 0.660;   // right column end
 
-// Number row y-centres — same for both left and right columns
-const GRID_ROW_Y   = [0.439, 0.491, 0.552, 0.617, 0.683];
+// Number row y-centres — TALL glyph cluster centres, not label rows.
+// Gap between rows is uniform ~140px at 2160p.
+// Verified 10/10 correct against known values on 8186.jpg.
+const GRID_ROW_Y   = [0.4958, 0.5611, 0.6259, 0.6907, 0.7556];
 const GRID_ROW_HALF = 0.018;  // crop window = centre ± 1.8% height
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,9 +138,9 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
   await sharp(srcPath)
     .extract({ left, top, width, height })
     .greyscale()
-    .threshold(100)   // bright number text survives; dark bg becomes black
+    .threshold(160)   // 160 cleanly separates number glyphs (~200+ br) from dark bg
     .negate()         // flip → black text on white background for Tesseract
-    .resize({ width: width * 5, kernel: 'nearest' })
+    .resize({ width: width * 8, kernel: 'nearest' })
     .toFile(tmpPath);
 
   return tmpPath;
