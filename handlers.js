@@ -1,6 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { supabase } from './supabase.js';
-import { performOCR, parseAttributes } from './utils/ocr.js';
+import { performOCR, mapGridValues } from './utils/ocr.js';
 import {
   getPositionRows, getArchetypeRows, getConfirmRow, getDeleteRow,
   createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
@@ -79,11 +79,11 @@ export async function handleCommand(interaction) {
 
     await interaction.reply({ content: '📸 Reading screenshot...', flags: 64 });
 
-    let ocrText = null, ocrName = null, ocrPosition = null, ocrArchetype = null;
+    let ocrValues = null, ocrName = null, ocrPosition = null, ocrArchetype = null;
     try {
       await interaction.editReply({ content: '🔍 Scanning attributes...' });
-      const quick = await performOCR(attachment.url);
-      ocrText      = quick.text;
+      const quick  = await performOCR(attachment.url);
+      ocrValues    = quick.values;
       ocrName      = quick.name;
       ocrPosition  = quick.position;
       ocrArchetype = quick.archetype;
@@ -95,7 +95,7 @@ export async function handleCommand(interaction) {
     activeEdits.set(interaction.user.id, {
       type: 'analyze_pending',
       attachmentUrl: attachment.url,
-      ocrText,
+      ocrValues,
       ocrName,
       ocrPosition,
       ocrArchetype,
@@ -438,18 +438,18 @@ async function runAnalysis(interaction, session, position, archetype) {
     });
   }
 
-  let ocrText, recruitName = null;
+  let ocrValues, recruitName = null;
   try {
-    if (session.ocrText) {
-      ocrText     = session.ocrText;
+    if (session.ocrValues) {
+      ocrValues   = session.ocrValues;
       recruitName = session.ocrName ?? null;
-      await interaction.editReply({ content: '📊 Parsing attributes...' });
+      await interaction.editReply({ content: '📊 Mapping attributes...' });
     } else {
       await interaction.editReply({ content: '🔍 Scanning attributes...' });
       const ocrResult = await performOCR(session.attachmentUrl);
-      ocrText     = ocrResult.text;
+      ocrValues   = ocrResult.values;
       recruitName = ocrResult.name;
-      await interaction.editReply({ content: '📊 Parsing attributes...' });
+      await interaction.editReply({ content: '📊 Mapping attributes...' });
     }
   } catch (err) {
     console.error('OCR failed:', err);
@@ -457,11 +457,12 @@ async function runAnalysis(interaction, session, position, archetype) {
     return interaction.editReply({ content: 'OCR failed. Try a clearer screenshot and run /analyze again.' });
   }
 
-  const attributes = parseAttributes(ocrText, configuredAttrs);
+  // Map the 10 grid values to attribute keys using the position/archetype order
+  const { attrs: attributes, missing: missingFromOCR } = mapGridValues(ocrValues, configuredAttrs);
   activeEdits.delete(interaction.user.id);
 
   if (Object.keys(attributes).length === 0) {
-    return interaction.editReply({ content: 'No ratings found. Make sure the screenshot clearly shows attribute numbers.' });
+    return interaction.editReply({ content: 'No ratings found. Make sure the screenshot clearly shows the attribute grid.' });
   }
 
   const { data: recruit, error } = await supabase
@@ -473,7 +474,7 @@ async function runAnalysis(interaction, session, position, archetype) {
   if (error) return interaction.editReply({ content: 'Failed to save recruit. Try again.' });
 
   const foundCount = Object.keys(attributes).length;
-  const missing    = configuredAttrs.filter(a => !(a in attributes));
+  const missing    = missingFromOCR;
 
   if (missing.length > 0) {
     activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0, hasName: !!recruitName });
@@ -729,6 +730,12 @@ async function advanceMissingFill(interaction, recruitId, attr, value) {
     return interaction.reply({ content: 'Session expired. Please run /analyze again.', flags: 64 });
   }
 
+  // Modal submits use reply(); button interactions use update()
+  const isModal = interaction.isModalSubmit?.() ?? false;
+  const respond = (payload) => isModal
+    ? interaction.reply({ ...payload, flags: 64 })
+    : interaction.update(payload);
+
   // Save value if provided
   if (value !== null) {
     const { data: recruit } = await supabase.from('recruits').select('attributes').eq('id', recruitId).single();
@@ -742,9 +749,10 @@ async function advanceMissingFill(interaction, recruitId, attr, value) {
     activeEdits.set(interaction.user.id, { ...session, filled: nextFilled });
     const nextAttr = session.missing[nextFilled];
     const remaining = session.missing.length - nextFilled;
-    return interaction.update({
+    return respond({
       content: (value !== null ? '✅ **' + attr + '** set to **' + value + '**.\n\n' : '⏭️ Skipped **' + attr + '**.\n\n') +
         '**' + remaining + '** attribute' + (remaining > 1 ? 's' : '') + ' remaining. Enter value for **' + nextAttr + '**:',
+      embeds: [],
       components: [getMissingAttrRow(recruitId, nextAttr)],
     });
   }
@@ -753,14 +761,14 @@ async function advanceMissingFill(interaction, recruitId, attr, value) {
   const { data: recruit } = await supabase.from('recruits').select('*').eq('id', recruitId).single();
   if (session.hasName) {
     activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruitId });
-    return interaction.update({
+    return respond({
       content: '✅ All attributes filled! Confirm to calculate fit score:',
       embeds: [createAnalysisEmbed(recruit)],
       components: [getConfirmRow(recruitId)],
     });
   }
   activeEdits.set(interaction.user.id, { type: 'naming', id: recruitId });
-  return interaction.update({
+  return respond({
     content: '✅ All attributes filled! Reply with the **recruit\'s name** (or type `skip` to leave unnamed):',
     embeds: [createAnalysisEmbed(recruit)],
     components: [],
