@@ -138,7 +138,8 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
   await sharp(srcPath)
     .extract({ left, top, width, height })
     .greyscale()
-    .threshold(160)   // 160 cleanly separates number glyphs (~200+ br) from dark bg
+    .normalise()      // autocontrast: stretches brightness range to 0-255 per cell
+    .threshold(160)   // now reliably separates number glyphs from dark bg regardless of team color
     .negate()         // flip → black text on white background for Tesseract
     .resize({ width: width * 8, kernel: 'nearest' })
     .toFile(tmpPath);
