@@ -107,6 +107,13 @@ export function getConfirmRow(recruitId) {
   );
 }
 
+export function getKeepDumpRow(recruitId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('keep_' + recruitId).setLabel('✅ Keep').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('dump_' + recruitId).setLabel('🗑️ Dump').setStyle(ButtonStyle.Danger),
+  );
+}
+
 export function getDeleteRow(recruitId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('clear_yes_' + recruitId).setLabel('Delete').setStyle(ButtonStyle.Danger),

@@ -4,7 +4,7 @@ import { performOCR, mapGridValues } from './utils/ocr.js';
 import {
   getPositionRows, getArchetypeRows, getConfirmRow, getDeleteRow,
   createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
-  createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit, getAttributeOrder,
+  createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit, getAttributeOrder, getKeepDumpRow,
 } from './utils.js';
 import { activeEdits, client } from './index.js';
 
@@ -686,6 +686,32 @@ export async function handleButton(interaction) {
     await interaction.editReply({
       content: 'Saved! Fit Score: **' + score + '%**',
       embeds: [createBreakdownEmbed(recruit, score, breakdown, warning)],
+      components: [getKeepDumpRow(recruitId)],
+    });
+  }
+
+  // keep_{id} — confirm kept, remove buttons
+  if (id.startsWith('keep_')) {
+    const recruitId = parseInt(id.replace('keep_', ''));
+    await interaction.deferUpdate();
+    const { data: recruit } = await supabase.from('recruits').select('name, position, archetype').eq('id', recruitId).single();
+    const label = recruit?.name ?? (recruit ? recruit.position + ' ' + recruit.archetype : 'Recruit');
+    await interaction.editReply({
+      content: '✅ **' + label + '** kept.',
+      components: [],
+    });
+  }
+
+  // dump_{id} — hard delete from DB
+  if (id.startsWith('dump_')) {
+    const recruitId = parseInt(id.replace('dump_', ''));
+    await interaction.deferUpdate();
+    const { data: recruit } = await supabase.from('recruits').select('name, position, archetype').eq('id', recruitId).single();
+    await supabase.from('recruits').delete().eq('id', recruitId);
+    const label = recruit ? (recruit.name ? '**' + recruit.name + '**' : recruit.position + ' ' + recruit.archetype) : 'Recruit';
+    await interaction.editReply({
+      content: '🗑️ ' + label + ' removed.',
+      embeds: [],
       components: [],
     });
   }
