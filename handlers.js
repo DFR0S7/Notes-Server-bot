@@ -72,7 +72,11 @@ export async function postTodoList(userId) {
 // from the bot in that channel (identified by the 📋 **Your Shortlist** header).
 
 async function postShortlist(channel, types, rows, activeSession, userId) {
-  // Look up stored message ID for this user — delete that exact message if it exists
+  const { content } = buildShortlistContent(types, rows);
+  const components  = buildShortlistComponents(types, rows, activeSession ?? { step: 'main' });
+  const payload     = { content, components };
+
+  // Try to edit the existing message in place first
   if (userId) {
     const { data: cfg } = await supabase
       .from('shortlist_config')
@@ -80,27 +84,23 @@ async function postShortlist(channel, types, rows, activeSession, userId) {
       .eq('user_id', userId)
       .single();
 
-    if (cfg?.message_id) {
-      // Only attempt delete if we're in the same channel
-      if (cfg.channel_id === channel.id) {
-        const prev = await channel.messages.fetch(cfg.message_id).catch(() => null);
-        if (prev) await prev.delete().catch(() => null);
+    if (cfg?.message_id && cfg.channel_id === channel.id) {
+      const existing = await channel.messages.fetch(cfg.message_id).catch(() => null);
+      if (existing) {
+        await existing.edit(payload);
+        return existing;
       }
     }
   }
 
-  const { content } = buildShortlistContent(types, rows);
-  const components  = buildShortlistComponents(types, rows, activeSession ?? { step: 'main' });
-  const newMsg = await channel.send({ content, components });
-
-  // Store the new message ID and channel ID
+  // No existing message — send a new one and store its ID
+  const newMsg = await channel.send(payload);
   if (userId) {
     await supabase.from('shortlist_config').upsert(
       { user_id: userId, message_id: newMsg.id, channel_id: channel.id },
       { onConflict: 'user_id' }
     );
   }
-
   return newMsg;
 }
 
@@ -1403,7 +1403,7 @@ export async function handleSelect(interaction) {
 
   // Don't defer for add_league — showModal() requires a raw (non-deferred) interaction
   const isModalAction = id === 'sl_action' && interaction.values[0] === 'add_league';
-  if (!isModalAction) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  if (!isModalAction) await interaction.deferUpdate();
 
   const types   = await getOrSeedShortlistTypes(userId);
   let { rows }  = await getShortlistData(userId, types);
@@ -1508,7 +1508,7 @@ export async function handleSelect(interaction) {
 export async function handleShortlistButton(interaction, id) {
   const userId = interaction.user.id;
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferUpdate();
 
   const types   = await getOrSeedShortlistTypes(userId);
   let { rows }  = await getShortlistData(userId, types);
