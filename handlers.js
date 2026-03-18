@@ -1266,14 +1266,10 @@ function buildShortlistContent(types, rows, activeState) {
 
   const lines = leagueData.map((g, i) => {
     // advance_time is stored on the Advance type row for each league
-    const advType   = types.find(t => t.is_advance);
-    const advRow    = advType && g.items.find(r => r.type_id === advType.id);
-    const advTime   = advRow?.advance_time ?? null;
-    const row = shortlistRowText(i + 1, g.name, g.items, types, advTime);
-    if (isEditing && activeState.leagueName === g.name) {
-      return `▶️  ${row}`;   // highlighted — active league
-    }
-    return isEditing ? `　　${row}` : row;  // indent others when editing, plain otherwise
+    const advType = types.find(t => t.is_advance);
+    const advRow  = advType && g.items.find(r => r.type_id === advType.id);
+    const advTime = advRow?.advance_time ?? null;
+    return shortlistRowText(i + 1, g.name, g.items, types, advTime);
   });
 
   const header = `📋 **Your Shortlist** — ${leagueNames.length} league${leagueNames.length !== 1 ? 's' : ''}`;
@@ -1308,7 +1304,7 @@ function buildShortlistComponents(types, rows, state) {
     out.push(new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('sl_edit_league')
-        .setPlaceholder('Pick a league to edit…')
+        .setPlaceholder('Pick a league to update…')
         .addOptions(leagues.map(name =>
           new StringSelectMenuOptionBuilder().setLabel(name).setValue(name)
         ))
@@ -1569,14 +1565,15 @@ export async function handleShortlistButton(interaction, id) {
     const advRow      = advType && rows.find(r => r.league_name === leagueName && r.type_id === advType.id);
     const currentVal  = advRow?.advance_time ?? '';
 
+    const titleName = leagueName.length > 30 ? leagueName.slice(0, 27) + '...' : leagueName;
     const modal = new ModalBuilder()
       .setCustomId(`sl_time_modal_${encodedName}`)
-      .setTitle(`Advance time — ${leagueName}`);
+      .setTitle(`Advance time — ${titleName}`);
     modal.addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('advance_time_input')
-          .setLabel('Advance time (e.g. "Fri 9pm") or blank to clear')
+          .setLabel('Day + time (e.g. Fri 9pm) or blank')
           .setStyle(TextInputStyle.Short)
           .setRequired(false)
           .setMaxLength(20)
