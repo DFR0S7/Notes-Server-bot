@@ -306,7 +306,7 @@ export function shortlistRowColor(guildItems, allTypes) {
 
 // Build the display string for one guild row
 // e.g. "🔴 CFB Dynasty   ⏰ 🔄 🎯"
-export function shortlistRowText(rank, guildName, guildItems, allTypes) {
+export function shortlistRowText(rank, guildName, guildItems, allTypes, advanceTime) {
   const color = shortlistRowColor(guildItems, allTypes);
 
   // Off items are hidden entirely — only show active, done, paused
@@ -322,5 +322,6 @@ export function shortlistRowText(rank, guildName, guildItems, allTypes) {
 
   const parts = [activeIcons, doneIcons, pausedIcons].filter(Boolean).join('  ');
   const status = parts || '✅ All clear';
-  return `${rank}. ${color} **${guildName}**　${status}`;
+  const timeTag = advanceTime ? `  ·  ${advanceTime}` : '';
+  return `${rank}. ${color} **${guildName}**　${status}${timeTag}`;
 }

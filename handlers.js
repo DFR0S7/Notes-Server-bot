@@ -72,7 +72,7 @@ export async function postTodoList(userId) {
 // from the bot in that channel (identified by the 📋 **Your Shortlist** header).
 
 async function postShortlist(channel, types, rows, activeSession, userId) {
-  const { content } = buildShortlistContent(types, rows);
+  const { content } = buildShortlistContent(types, rows, activeSession);
   const components  = buildShortlistComponents(types, rows, activeSession ?? { step: 'main' });
   const payload     = { content, components };
 
@@ -951,6 +951,32 @@ export async function handleModal(interaction) {
     return interaction.editReply({ content: `✅ **${leagueName}** added.`, flags: MessageFlags.Ephemeral });
   }
 
+  // sl_time_modal_{encodedLeague} — save advance time for a league
+  if (id.startsWith('sl_time_modal_')) {
+    await interaction.deferUpdate();
+    const encodedName = id.replace('sl_time_modal_', '');
+    const userId      = interaction.user.id;
+    const channel     = interaction.channel;
+    const rawVal      = interaction.fields.getTextInputValue('advance_time_input').trim();
+    const newTime     = rawVal || null;
+
+    const types = await getOrSeedShortlistTypes(userId);
+    const { rows } = await getShortlistData(userId, types);
+
+    const leagueName = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    const advType    = types.find(t => t.is_advance);
+    const advRow     = advType && rows.find(r => r.league_name === leagueName && r.type_id === advType.id);
+
+    if (advRow) {
+      await supabase.from('shortlist').update({ advance_time: newTime }).eq('id', advRow.id);
+    }
+
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
+    await postShortlist(channel, types, freshRows, { step: 'edit_toggles', leagueName }, userId);
+    return;
+  }
+
   // modal_fill_{recruitId}_{attr}
   if (id.startsWith('modal_fill_')) {
     const parts     = id.replace('modal_fill_', '').split('_');
@@ -1220,27 +1246,40 @@ async function seedLeagueRows(userId, leagueName, types, existingRows = []) {
 // SHORTLIST — DISPLAY BUILDERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildShortlistContent(types, rows) {
+function buildShortlistContent(types, rows, activeState) {
   const leagueNames = [...new Set(rows.map(r => r.league_name))];
 
   if (!leagueNames.length) {
     return { content: '📋 **Your Shortlist**\n\nNo leagues yet. Use **Add league** to get started.' };
   }
 
-  // Build per-league summaries then sort: 🔴 → 🟡 → ⏸️ → 🟢, then by min priority_order
   const leagueData = leagueNames.map(name => {
-    const items    = rows.filter(r => r.league_name === name);
-    const color    = shortlistRowColor(items, types);
-    const order    = Math.min(...items.map(r => r.priority_order ?? 999));
+    const items = rows.filter(r => r.league_name === name);
+    const color = shortlistRowColor(items, types);
+    const order = Math.min(...items.map(r => r.priority_order ?? 999));
     return { name, items, color, order };
   });
-  // Pure manual order — color indicators are visual only, don't affect position
   leagueData.sort((a, b) => a.order - b.order);
 
-  const lines = leagueData.map((g, i) => shortlistRowText(i + 1, g.name, g.items, types));
-  return {
-    content: `📋 **Your Shortlist** — ${leagueNames.length} league${leagueNames.length !== 1 ? 's' : ''}\n\n` + lines.join('\n'),
-  };
+  const editSteps = ['edit_toggles', 'item_state_pick', 'advance_confirm'];
+  const isEditing = activeState && editSteps.includes(activeState.step);
+
+  const lines = leagueData.map((g, i) => {
+    // advance_time is stored on the Advance type row for each league
+    const advType   = types.find(t => t.is_advance);
+    const advRow    = advType && g.items.find(r => r.type_id === advType.id);
+    const advTime   = advRow?.advance_time ?? null;
+    const row = shortlistRowText(i + 1, g.name, g.items, types, advTime);
+    if (isEditing && activeState.leagueName === g.name) {
+      return `▶️  ${row}`;   // highlighted — active league
+    }
+    return isEditing ? `　　${row}` : row;  // indent others when editing, plain otherwise
+  });
+
+  const header = `📋 **Your Shortlist** — ${leagueNames.length} league${leagueNames.length !== 1 ? 's' : ''}`;
+  const editingLine = isEditing ? `\n\n✏️ Updating **${activeState.leagueName}**` : '';
+
+  return { content: header + '\n\n' + lines.join('\n') + editingLine };
 }
 
 function buildShortlistComponents(types, rows, state) {
@@ -1250,7 +1289,7 @@ function buildShortlistComponents(types, rows, state) {
 
   if (state.step === 'main') {
     const options = [
-      new StringSelectMenuOptionBuilder().setLabel('Edit a league').setValue('edit').setEmoji('✏️'),
+      new StringSelectMenuOptionBuilder().setLabel('Update league').setValue('edit').setEmoji('✏️'),
       new StringSelectMenuOptionBuilder().setLabel('Add league').setValue('add_league').setEmoji('➕'),
     ];
     if (leagues.length > 1) {
@@ -1298,6 +1337,11 @@ function buildShortlistComponents(types, rows, state) {
     for (let i = 0; i < itemButtons.length; i += 5) {
       out.push(new ActionRowBuilder().addComponents(itemButtons.slice(i, i + 5)));
     }
+    // Advance time button — shows current value in label if set
+    const advTimeRow  = advanceType && leagueItems.find(r => r.type_id === advanceType.id);
+    const advTimeVal  = advTimeRow?.advance_time ?? null;
+    const advTimeLbl  = advTimeVal ? `🕐 ${advTimeVal}` : '🕐 Set advance time';
+
     const actionButtons = [
       new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`sl_remove_league_${enc}`).setLabel('Remove league').setStyle(ButtonStyle.Danger),
@@ -1310,6 +1354,13 @@ function buildShortlistComponents(types, rows, state) {
           .setStyle(ButtonStyle.Success)
       );
     }
+    // Advance time button always shown in edit view
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`sl_set_time_${enc}`)
+        .setLabel(advTimeLbl)
+        .setStyle(advTimeVal ? ButtonStyle.Primary : ButtonStyle.Secondary)
+    ));
     out.push(new ActionRowBuilder().addComponents(actionButtons));
 
   } else if (state.step === 'item_state_pick') {
@@ -1508,6 +1559,33 @@ export async function handleSelect(interaction) {
 export async function handleShortlistButton(interaction, id) {
   const userId = interaction.user.id;
 
+  // sl_set_time opens a modal — can't deferUpdate before showModal
+  if (id.startsWith('sl_set_time_')) {
+    const types = await getOrSeedShortlistTypes(userId);
+    const { rows } = await getShortlistData(userId, types);
+    const encodedName = id.replace('sl_set_time_', '');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    const advType     = types.find(t => t.is_advance);
+    const advRow      = advType && rows.find(r => r.league_name === leagueName && r.type_id === advType.id);
+    const currentVal  = advRow?.advance_time ?? '';
+
+    const modal = new ModalBuilder()
+      .setCustomId(`sl_time_modal_${encodedName}`)
+      .setTitle(`Advance time — ${leagueName}`);
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('advance_time_input')
+          .setLabel('Advance time (e.g. "Fri 9pm") or blank to clear')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(20)
+          .setValue(currentVal)
+      )
+    );
+    return interaction.showModal(modal);
+  }
+
   await interaction.deferUpdate();
 
   const types   = await getOrSeedShortlistTypes(userId);
@@ -1586,6 +1664,16 @@ export async function handleShortlistButton(interaction, id) {
       .eq('user_id', userId)
       .eq('league_name', leagueName)
       .eq('state', 'done');
+
+    // Clear advance_time — new cycle starts fresh
+    const advType = types.find(t => t.is_advance);
+    if (advType) {
+      await supabase.from('shortlist')
+        .update({ advance_time: null })
+        .eq('user_id', userId)
+        .eq('league_name', leagueName)
+        .eq('type_id', advType.id);
+    }
 
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
