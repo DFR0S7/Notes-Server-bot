@@ -1128,7 +1128,33 @@ async function getShortlistData(userId, types) {
   // Re-fetch after seeding
   const { data: fresh } = await supabase
     .from('shortlist').select('*').eq('user_id', userId).order('priority_order');
-  return { rows: fresh ?? [] };
+  const normalized = fresh ?? [];
+
+  // Normalize: ensure all rows for a league share the same priority_order (min of their values)
+  // This fixes legacy rows seeded before the consistent-order fix
+  const toFix = [];
+  const leagueMap = new Map();
+  for (const row of normalized) {
+    const cur = leagueMap.get(row.league_name);
+    if (cur === undefined || row.priority_order < cur) {
+      leagueMap.set(row.league_name, row.priority_order);
+    }
+  }
+  for (const row of normalized) {
+    const canonical = leagueMap.get(row.league_name);
+    if (row.priority_order !== canonical) toFix.push({ id: row.id, priority_order: canonical });
+  }
+  for (const fix of toFix) {
+    await supabase.from('shortlist').update({ priority_order: fix.priority_order }).eq('id', fix.id);
+  }
+  if (toFix.length) {
+    // Re-fetch one more time if we normalized anything
+    const { data: renorm } = await supabase
+      .from('shortlist').select('*').eq('user_id', userId).order('priority_order');
+    return { rows: renorm ?? [] };
+  }
+
+  return { rows: normalized };
 }
 
 async function seedLeagueRows(userId, leagueName, types, existingRows = []) {
@@ -1137,17 +1163,19 @@ async function seedLeagueRows(userId, leagueName, types, existingRows = []) {
   );
   if (!missing.length) return;
 
-  const maxOrder = existingRows
-    .filter(r => r.league_name === leagueName)
-    .reduce((m, r) => Math.max(m, r.priority_order ?? 0), existingRows.length);
+  // All rows for a league share the same priority_order — equal to the number
+  // of distinct leagues already present + 1 (i.e. append at end of list)
+  const existingLeagues = new Set(existingRows.map(r => r.league_name));
+  existingLeagues.delete(leagueName); // don't count self if partially seeded
+  const leagueOrder = existingLeagues.size + 1;
 
   await supabase.from('shortlist').insert(
-    missing.map((t, i) => ({
+    missing.map(t => ({
       user_id: userId,
       league_name: leagueName,
       type_id: t.id,
       state: 'off',
-      priority_order: maxOrder + i + 1,
+      priority_order: leagueOrder,
     }))
   );
 }
@@ -1168,6 +1196,7 @@ function buildShortlistContent(types, rows) {
   const leagueData = leagueNames.map(name => {
     const items    = rows.filter(r => r.league_name === name);
     const color    = shortlistRowColor(items, types);
+    // Use min priority_order as canonical rank — handles legacy rows with mixed values
     const minOrder = Math.min(...items.map(r => r.priority_order ?? 999));
     return { name, items, color, minOrder };
   });
@@ -1396,10 +1425,15 @@ export async function handleSelect(interaction) {
 
     const rowsA = rows.filter(r => r.league_name === leagueNameA);
     const rowsB = rows.filter(r => r.league_name === leagueNameB);
-    const orderA = rowsA[0]?.priority_order ?? 0;
-    const orderB = rowsB[0]?.priority_order ?? 0;
-    const idsA = rowsA.map(r => r.id);
-    const idsB = rowsB.map(r => r.id);
+
+    // Use the minimum priority_order for each league as its canonical rank,
+    // then assign that rank uniformly to ALL rows for each league
+    const orderA = Math.min(...rowsA.map(r => r.priority_order ?? 999));
+    const orderB = Math.min(...rowsB.map(r => r.priority_order ?? 999));
+    const idsA   = rowsA.map(r => r.id);
+    const idsB   = rowsB.map(r => r.id);
+
+    // Swap: A gets B's rank, B gets A's rank — all rows updated uniformly
     if (idsA.length) await supabase.from('shortlist').update({ priority_order: orderB }).in('id', idsA);
     if (idsB.length) await supabase.from('shortlist').update({ priority_order: orderA }).in('id', idsB);
 
