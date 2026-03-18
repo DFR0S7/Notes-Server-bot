@@ -1541,12 +1541,4 @@ export async function handleShortlistButton(interaction, id) {
       components: buildShortlistComponents(types, freshRows, { step: 'main' }),
     });
   }
-    const { rows: freshRows } = await getShortlistData(userId, types);
-    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
-    const { content } = buildShortlistContent(types, freshRows);
-    return interaction.editReply({
-      content: `🗑️ **${guildName}** removed.\n\n` + content,
-      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
-    });
-  }
 }
