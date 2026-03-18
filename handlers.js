@@ -1192,17 +1192,14 @@ function buildShortlistContent(types, rows) {
   }
 
   // Build per-league summaries then sort: 🔴 → 🟡 → ⏸️ → 🟢, then by min priority_order
-  const colorRank = { '🔴': 0, '🟡': 1, '⏸️': 2, '🟢': 3 };
   const leagueData = leagueNames.map(name => {
     const items    = rows.filter(r => r.league_name === name);
     const color    = shortlistRowColor(items, types);
-    // Use min priority_order as canonical rank — handles legacy rows with mixed values
-    const minOrder = Math.min(...items.map(r => r.priority_order ?? 999));
-    return { name, items, color, minOrder };
+    const order    = Math.min(...items.map(r => r.priority_order ?? 999));
+    return { name, items, color, order };
   });
-  leagueData.sort((a, b) =>
-    (colorRank[a.color] ?? 4) - (colorRank[b.color] ?? 4) || a.minOrder - b.minOrder
-  );
+  // Pure manual order — color indicators are visual only, don't affect position
+  leagueData.sort((a, b) => a.order - b.order);
 
   const lines = leagueData.map((g, i) => shortlistRowText(i + 1, g.name, g.items, types));
   return {
@@ -1359,7 +1356,9 @@ export async function handleSelect(interaction) {
   // Only handle shortlist selects
   if (!id.startsWith('sl_')) return;
 
-  await interaction.deferUpdate();
+  // Don't defer for add_league — showModal() requires a raw (non-deferred) interaction
+  const isModalAction = id === 'sl_action' && interaction.values[0] === 'add_league';
+  if (!isModalAction) await interaction.deferUpdate();
 
   const types = await getOrSeedShortlistTypes(userId);
   let { rows } = await getShortlistData(userId, types);
