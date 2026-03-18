@@ -1312,8 +1312,10 @@ function buildShortlistComponents(types, rows, state) {
       new StringSelectMenuBuilder()
         .setCustomId('sl_reorder_a')
         .setPlaceholder('Move which league?')
-        .addOptions(leagues.map(name =>
-          new StringSelectMenuOptionBuilder().setLabel(name).setValue(name)
+        .addOptions(leagues.map((name, i) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(`${i + 1}. ${name}`)
+            .setValue(name)
         ))
     ));
     out.push(new ActionRowBuilder().addComponents(
@@ -1321,14 +1323,21 @@ function buildShortlistComponents(types, rows, state) {
     ));
 
   } else if (state.step === 'reorder_b') {
+    // Position picker — show all positions except current one
+    const currentPos = leagues.indexOf(state.leagueNameA) + 1;
     out.push(new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`sl_reorder_b_${encodeLeague(state.leagueNameA)}`)
-        .setPlaceholder('Swap with which league?')
+        .setPlaceholder(`Move to which position? (currently #${currentPos})`)
         .addOptions(
           leagues
-            .filter(n => n !== state.leagueNameA)
-            .map(name => new StringSelectMenuOptionBuilder().setLabel(name).setValue(name))
+            .map((name, i) => ({ name, pos: i + 1 }))
+            .filter(({ name }) => name !== state.leagueNameA)
+            .map(({ name, pos }) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(`Position ${pos} — ${name}`)
+                .setValue(String(pos))
+            )
         )
     ));
     out.push(new ActionRowBuilder().addComponents(
@@ -1405,36 +1414,55 @@ export async function handleSelect(interaction) {
     });
   }
 
-  // sl_reorder_a — picked league A to move
+  // sl_reorder_a — picked which league to move, now pick destination position
   if (id === 'sl_reorder_a') {
     const leagueNameA = value;
     activeEdits.set(userId, { type: 'shortlist', step: 'reorder_b', leagueNameA });
     const { content: c } = buildShortlistContent(types, rows);
+    const leagueNames = [...new Set(rows.map(r => r.league_name))];
+    const currentPos  = leagueNames.indexOf(leagueNameA) + 1;
     return interaction.editReply({
-      content: c + `\n\n↕️ Moving **${leagueNameA}** — swap with which league?`,
+      content: c + `\n\n↕️ Moving **${leagueNameA}** (position ${currentPos}) — move to which position?`,
       components: buildShortlistComponents(types, rows, { step: 'reorder_b', leagueNameA }),
     });
   }
 
-  // sl_reorder_b_{encodedLeagueA} — picked league B to swap with
+  // sl_reorder_b_{encodedLeagueA} — picked destination position, shift other leagues
   if (id.startsWith('sl_reorder_b_')) {
     const sess        = activeEdits.get(userId);
     const leagueNameA = sess?.leagueNameA ?? '';
-    const leagueNameB = value;
+    const destPos     = parseInt(value); // 1-based target position
 
-    const rowsA = rows.filter(r => r.league_name === leagueNameA);
-    const rowsB = rows.filter(r => r.league_name === leagueNameB);
+    // Build current ordered league list
+    const leagueNames = [...new Set(rows.map(r => r.league_name))];
+    leagueNames.sort((a, b) => {
+      const orderA = Math.min(...rows.filter(r => r.league_name === a).map(r => r.priority_order ?? 999));
+      const orderB = Math.min(...rows.filter(r => r.league_name === b).map(r => r.priority_order ?? 999));
+      return orderA - orderB;
+    });
 
-    // Use the minimum priority_order for each league as its canonical rank,
-    // then assign that rank uniformly to ALL rows for each league
-    const orderA = Math.min(...rowsA.map(r => r.priority_order ?? 999));
-    const orderB = Math.min(...rowsB.map(r => r.priority_order ?? 999));
-    const idsA   = rowsA.map(r => r.id);
-    const idsB   = rowsB.map(r => r.id);
+    const fromPos = leagueNames.indexOf(leagueNameA) + 1; // 1-based current position
+    if (fromPos === 0 || fromPos === destPos) {
+      // No-op — already there or not found
+      activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+      const { content: c } = buildShortlistContent(types, rows);
+      return interaction.editReply({ content: c, components: buildShortlistComponents(types, rows, { step: 'main' }) });
+    }
 
-    // Swap: A gets B's rank, B gets A's rank — all rows updated uniformly
-    if (idsA.length) await supabase.from('shortlist').update({ priority_order: orderB }).in('id', idsA);
-    if (idsB.length) await supabase.from('shortlist').update({ priority_order: orderA }).in('id', idsB);
+    // Remove league from current position and insert at destination
+    const reordered = [...leagueNames];
+    reordered.splice(fromPos - 1, 1);           // remove from current spot
+    reordered.splice(destPos - 1, 0, leagueNameA); // insert at destination
+
+    // Write new priority_order values (1-based) for all leagues
+    for (let i = 0; i < reordered.length; i++) {
+      const name    = reordered[i];
+      const newOrder = i + 1;
+      const ids = rows.filter(r => r.league_name === name).map(r => r.id);
+      if (ids.length) {
+        await supabase.from('shortlist').update({ priority_order: newOrder }).in('id', ids);
+      }
+    }
 
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
