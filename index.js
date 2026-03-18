@@ -2,7 +2,7 @@ import './server.js';
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import axios from 'axios';
 import { config } from './config.js';
-import { handleCommand, handleButton, handleMessage, handleModal } from './handlers.js';
+import { handleCommand, handleButton, handleMessage, handleModal, handleSelect } from './handlers.js';
 
 export const client = new Client({
   intents: [
@@ -74,6 +74,24 @@ const commands = [
     .setName('todo-setchannel')
     .setDescription('Set the channel where the live todo list is posted')
     .addChannelOption(o => o.setName('channel').setDescription('Channel to post the live list in').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('shortlist')
+    .setDescription('Quick view of all leagues and their open items'),
+  new SlashCommandBuilder()
+    .setName('shortlist-config')
+    .setDescription('Manage shortlist item types')
+    .addStringOption(o => o
+      .setName('action')
+      .setDescription('What to do')
+      .setRequired(true)
+      .addChoices(
+        { name: 'Add type',    value: 'add'    },
+        { name: 'Remove type', value: 'remove' },
+        { name: 'Rename type', value: 'rename' },
+      ))
+    .addStringOption(o => o.setName('name').setDescription('Type name').setRequired(false))
+    .addStringOption(o => o.setName('icon').setDescription('Emoji icon').setRequired(false))
+    .addStringOption(o => o.setName('new_name').setDescription('New name (for rename)').setRequired(false)),
 ].map(c => c.toJSON());
 
 async function start() {
@@ -111,6 +129,7 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) return handleCommand(interaction);
     if (interaction.isButton())           return handleButton(interaction);
+    if (interaction.isStringSelectMenu())  return handleSelect(interaction);
     if (interaction.isModalSubmit())      return handleModal(interaction);
   } catch (err) {
     console.error('Interaction error:', err);

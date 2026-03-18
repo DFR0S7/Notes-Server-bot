@@ -270,3 +270,57 @@ export async function calculateFit(position, archetype, attributes) {
   const warning = total === 0 ? 'No configured attributes matched recruit data.' : null;
   return { score, breakdown, warning };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTLIST HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Starter item types — seeded on first /shortlist run per user
+export const SHORTLIST_STARTER_TYPES = [
+  { name: 'Advance',    icon: '⏰', is_advance: true  },
+  { name: 'Game',       icon: '🏈', is_advance: false },
+  { name: 'Recruiting', icon: '🎯', is_advance: false },
+  { name: 'Other',      icon: '📋', is_advance: false },
+];
+
+// Priority colour based on which items are active for a guild row
+// 🔴 if Advance is on, 🟡 if any other item on, 🟢 if all clear
+export function shortlistRowColor(guildItems, allTypes) {
+  // Only visible items (not off) count toward color
+  const visible = guildItems.filter(i => i.state !== 'off');
+  if (!visible.length) return '🟢';
+  const advanceOn = visible.some(i => {
+    const def = allTypes.find(t => t.id === i.type_id);
+    return def?.is_advance && i.state === 'active';
+  });
+  if (advanceOn) return '🔴';
+  const hasActive = visible.some(i => i.state === 'active');
+  if (hasActive) return '🟡';
+  const allDone   = visible.every(i => i.state === 'done' || i.state === 'paused');
+  const anyDone   = visible.some(i => i.state === 'done');
+  if (allDone && anyDone) return '🟡';  // still in-cycle, not fully clear
+  const anyPaused = visible.some(i => i.state === 'paused');
+  if (anyPaused) return '⏸️';
+  return '🟢';
+}
+
+// Build the display string for one guild row
+// e.g. "🔴 CFB Dynasty   ⏰ 🔄 🎯"
+export function shortlistRowText(rank, guildName, guildItems, allTypes) {
+  const color = shortlistRowColor(guildItems, allTypes);
+
+  // Off items are hidden entirely — only show active, done, paused
+  const activeIcons = allTypes
+    .filter(t => guildItems.find(gi => gi.type_id === t.id && gi.state === 'active'))
+    .map(t => t.icon).join(' ');
+  const doneIcons = allTypes
+    .filter(t => guildItems.find(gi => gi.type_id === t.id && gi.state === 'done'))
+    .map(t => `✅${t.icon}`).join(' ');
+  const pausedIcons = allTypes
+    .filter(t => guildItems.find(gi => gi.type_id === t.id && gi.state === 'paused'))
+    .map(t => `⏸️${t.icon}`).join(' ');
+
+  const parts = [activeIcons, doneIcons, pausedIcons].filter(Boolean).join('  ');
+  const status = parts || '✅ All clear';
+  return `${rank}. ${color} **${guildName}**　${status}`;
+}

@@ -1,10 +1,11 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, ModalBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { supabase } from './supabase.js';
 import { performOCR, mapGridValues } from './utils/ocr.js';
 import {
   getPositionRows, getArchetypeRows, getConfirmRow, getDeleteRow,
   createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
   createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit, getAttributeOrder, getKeepDumpRow,
+  SHORTLIST_STARTER_TYPES, shortlistRowColor, shortlistRowText,
 } from './utils.js';
 import { activeEdits, client } from './index.js';
 
@@ -213,6 +214,77 @@ export async function handleCommand(interaction) {
     }
 
     await interaction.reply({ embeds: [createRecruitDetailEmbed(data)], flags: 64 });
+  }
+
+  // /shortlist
+  if (commandName === 'shortlist') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const userId = interaction.user.id;
+
+    const types = await getOrSeedShortlistTypes(userId);
+    let { rows } = await getShortlistData(userId, types);
+
+    // First run — auto-import league names from todos table
+    if (!rows.length) {
+      const { data: todoLeagues } = await supabase
+        .from('todos')
+        .select('league')
+        .eq('user_id', userId)
+        .neq('league', null);
+
+      const uniqueLeagues = [...new Set((todoLeagues ?? []).map(t => t.league).filter(Boolean))];
+      for (const leagueName of uniqueLeagues) {
+        await seedLeagueRows(userId, leagueName, types, []);
+      }
+      if (uniqueLeagues.length) {
+        ({ rows } = await getShortlistData(userId, types));
+      }
+    }
+
+    const { content } = buildShortlistContent(types, rows);
+    const components = buildShortlistComponents(types, rows, { step: 'main' });
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    return interaction.editReply({ content, components });
+  }
+
+  // /shortlist-config
+  if (commandName === 'shortlist-config') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const userId = interaction.user.id;
+    const action  = interaction.options.getString('action');
+    const name    = interaction.options.getString('name');
+    const icon    = interaction.options.getString('icon');
+    const newName = interaction.options.getString('new_name');
+
+    const types = await getOrSeedShortlistTypes(userId);
+
+    if (action === 'add') {
+      if (!name || !icon) return interaction.editReply({ content: 'Please provide both a name and an icon emoji.' });
+      const maxOrder = types.reduce((m, t) => Math.max(m, t.sort_order), 0);
+      await supabase.from('shortlist_types').insert({ user_id: userId, name, icon, is_advance: false, sort_order: maxOrder + 1 });
+      return interaction.editReply({ content: `✅ Added **${icon} ${name}** to your shortlist types.` });
+    }
+
+    if (action === 'remove') {
+      if (!name) return interaction.editReply({ content: 'Please provide the name of the type to remove.' });
+      const match = types.find(t => t.name.toLowerCase() === name.toLowerCase());
+      if (!match) return interaction.editReply({ content: `No type named **${name}** found.` });
+      if (match.is_advance) return interaction.editReply({ content: '⏰ **Advance** is a built-in type and cannot be removed.' });
+      await supabase.from('shortlist').delete().eq('type_id', match.id);
+      await supabase.from('shortlist_types').delete().eq('id', match.id);
+      return interaction.editReply({ content: `🗑️ Removed **${match.icon} ${match.name}**.` });
+    }
+
+    if (action === 'rename') {
+      if (!name || !newName) return interaction.editReply({ content: 'Please provide the current name and a new name.' });
+      const match = types.find(t => t.name.toLowerCase() === name.toLowerCase());
+      if (!match) return interaction.editReply({ content: `No type named **${name}** found.` });
+      if (match.is_advance) return interaction.editReply({ content: '⏰ **Advance** is a built-in type and cannot be renamed.' });
+      await supabase.from('shortlist_types').update({ name: newName }).eq('id', match.id);
+      return interaction.editReply({ content: `✅ Renamed **${match.name}** → **${newName}**.` });
+    }
+
+    return interaction.editReply({ content: 'Unknown action.' });
   }
 
   // /todo-setchannel
@@ -516,6 +588,9 @@ async function runAnalysis(interaction, session, position, archetype) {
 export async function handleButton(interaction) {
   const id = interaction.customId;
 
+  // Route all shortlist buttons to dedicated handler
+  if (id.startsWith('sl_')) return handleShortlistButton(interaction, id);
+
   // todo_toggle_{id} or todo_toggle_{id}|{filter}
   if (id.startsWith('todo_toggle_')) {
     const rest   = id.replace('todo_toggle_', '');
@@ -816,6 +891,30 @@ async function advanceMissingFill(interaction, recruitId, attr, value) {
 export async function handleModal(interaction) {
   const id = interaction.customId;
 
+  // sl_add_league_modal — add a new league to the shortlist
+  if (id === 'sl_add_league_modal') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const userId     = interaction.user.id;
+    const leagueName = interaction.fields.getTextInputValue('league_name_input').trim();
+    if (!leagueName) return interaction.editReply({ content: 'League name cannot be empty.' });
+
+    const types = await getOrSeedShortlistTypes(userId);
+    const { rows } = await getShortlistData(userId, types);
+
+    if (rows.find(r => r.league_name.toLowerCase() === leagueName.toLowerCase())) {
+      return interaction.editReply({ content: `**${leagueName}** is already on your shortlist.` });
+    }
+
+    await seedLeagueRows(userId, leagueName, types, rows);
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    const { content: c } = buildShortlistContent(types, freshRows);
+    return interaction.editReply({
+      content: `✅ **${leagueName}** added.\n\n` + c,
+      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
+    });
+  }
+
   // modal_fill_{recruitId}_{attr}
   if (id.startsWith('modal_fill_')) {
     const parts     = id.replace('modal_fill_', '').split('_');
@@ -996,5 +1095,458 @@ export async function handleMessage(message) {
     if (errors.length) reply += '\n\nSkipped:\n' + errors.join('\n');
     reply += '\n\nType more ranges or **done** to finish and see full summary.';
     return message.reply(reply);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTLIST — DB HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function getOrSeedShortlistTypes(userId) {
+  const { data: existing } = await supabase
+    .from('shortlist_types').select('*').eq('user_id', userId).order('sort_order');
+  if (existing?.length) return existing;
+
+  const rows = SHORTLIST_STARTER_TYPES.map((t, i) => ({
+    user_id: userId, name: t.name, icon: t.icon,
+    is_advance: t.is_advance ?? false, sort_order: i + 1,
+  }));
+  const { data: seeded } = await supabase.from('shortlist_types').insert(rows).select();
+  return seeded ?? [];
+}
+
+async function getShortlistData(userId, types) {
+  const { data: rows } = await supabase
+    .from('shortlist').select('*').eq('user_id', userId).order('priority_order');
+
+  // Fill gaps for any league missing rows for newer types
+  const leagues = [...new Set((rows ?? []).map(r => r.league_name))];
+  for (const leagueName of leagues) {
+    await seedLeagueRows(userId, leagueName, types, rows ?? []);
+  }
+
+  // Re-fetch after seeding
+  const { data: fresh } = await supabase
+    .from('shortlist').select('*').eq('user_id', userId).order('priority_order');
+  return { rows: fresh ?? [] };
+}
+
+async function seedLeagueRows(userId, leagueName, types, existingRows = []) {
+  const missing = types.filter(t =>
+    !existingRows.find(r => r.league_name === leagueName && r.type_id === t.id)
+  );
+  if (!missing.length) return;
+
+  const maxOrder = existingRows
+    .filter(r => r.league_name === leagueName)
+    .reduce((m, r) => Math.max(m, r.priority_order ?? 0), existingRows.length);
+
+  await supabase.from('shortlist').insert(
+    missing.map((t, i) => ({
+      user_id: userId,
+      league_name: leagueName,
+      type_id: t.id,
+      state: 'off',
+      priority_order: maxOrder + i + 1,
+    }))
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTLIST — DISPLAY BUILDERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildShortlistContent(types, rows) {
+  const leagueNames = [...new Set(rows.map(r => r.league_name))];
+
+  if (!leagueNames.length) {
+    return { content: '📋 **Your Shortlist**\n\nNo leagues yet. Use **Add league** to get started.' };
+  }
+
+  // Build per-league summaries then sort: 🔴 → 🟡 → ⏸️ → 🟢, then by min priority_order
+  const colorRank = { '🔴': 0, '🟡': 1, '⏸️': 2, '🟢': 3 };
+  const leagueData = leagueNames.map(name => {
+    const items    = rows.filter(r => r.league_name === name);
+    const color    = shortlistRowColor(items, types);
+    const minOrder = Math.min(...items.map(r => r.priority_order ?? 999));
+    return { name, items, color, minOrder };
+  });
+  leagueData.sort((a, b) =>
+    (colorRank[a.color] ?? 4) - (colorRank[b.color] ?? 4) || a.minOrder - b.minOrder
+  );
+
+  const lines = leagueData.map((g, i) => shortlistRowText(i + 1, g.name, g.items, types));
+  return {
+    content: `📋 **Your Shortlist** — ${leagueNames.length} league${leagueNames.length !== 1 ? 's' : ''}\n\n` + lines.join('\n'),
+  };
+}
+
+function buildShortlistComponents(types, rows, state) {
+  const leagues = [...new Set(rows.map(r => r.league_name))];
+
+  const out = [];
+
+  if (state.step === 'main') {
+    const options = [
+      new StringSelectMenuOptionBuilder().setLabel('Edit a league').setValue('edit').setEmoji('✏️'),
+      new StringSelectMenuOptionBuilder().setLabel('Add league').setValue('add_league').setEmoji('➕'),
+    ];
+    if (leagues.length > 1) {
+      options.splice(1, 0,
+        new StringSelectMenuOptionBuilder().setLabel('Reorder leagues').setValue('reorder').setEmoji('↕️')
+      );
+    }
+    out.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('sl_action')
+        .setPlaceholder('Choose an action…')
+        .addOptions(options)
+    ));
+
+  } else if (state.step === 'edit_pick') {
+    out.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('sl_edit_league')
+        .setPlaceholder('Pick a league to edit…')
+        .addOptions(leagues.map(name =>
+          new StringSelectMenuOptionBuilder().setLabel(name).setValue(name)
+        ))
+    ));
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary)
+    ));
+
+  } else if (state.step === 'edit_toggles') {
+    const leagueItems = rows.filter(r => r.league_name === state.leagueName);
+    const advanceType = types.find(t => t.is_advance);
+    const advanceItem = advanceType && leagueItems.find(r => r.type_id === advanceType.id);
+    const advanceActive = advanceItem?.state === 'active';
+
+    const STATE_STYLE  = { off: ButtonStyle.Secondary, active: ButtonStyle.Success, done: ButtonStyle.Success, paused: ButtonStyle.Primary };
+    const STATE_PREFIX = { off: '⬜ ', active: '🟢 ', done: '✅ ', paused: '⏸️ ' };
+    const enc = encodeLeague(state.leagueName);
+    const itemButtons = types.map(t => {
+      const item   = leagueItems.find(r => r.type_id === t.id);
+      const iState = item?.state ?? 'off';
+      return new ButtonBuilder()
+        .setCustomId(`sl_select_${enc}_${t.id}`)
+        .setLabel(`${STATE_PREFIX[iState]}${t.icon} ${t.name}`)
+        .setStyle(STATE_STYLE[iState]);
+    });
+    for (let i = 0; i < itemButtons.length; i += 5) {
+      out.push(new ActionRowBuilder().addComponents(itemButtons.slice(i, i + 5)));
+    }
+    const actionButtons = [
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`sl_remove_league_${enc}`).setLabel('Remove league').setStyle(ButtonStyle.Danger),
+    ];
+    if (advanceActive) {
+      actionButtons.unshift(
+        new ButtonBuilder()
+          .setCustomId(`sl_advance_complete_${enc}`)
+          .setLabel('✅ Complete Advance')
+          .setStyle(ButtonStyle.Success)
+      );
+    }
+    out.push(new ActionRowBuilder().addComponents(actionButtons));
+
+  } else if (state.step === 'item_state_pick') {
+    const leagueItems = rows.filter(r => r.league_name === state.leagueName);
+    const type        = types.find(t => t.id === state.typeId);
+    const item        = leagueItems.find(r => r.type_id === state.typeId);
+    const cur         = item?.state ?? 'off';
+    const enc         = encodeLeague(state.leagueName);
+    const mk = (label, value, style) => new ButtonBuilder()
+      .setCustomId(`sl_setstate_${enc}_${state.typeId}_${value}`)
+      .setLabel(label)
+      .setStyle(cur === value ? ButtonStyle.Danger : style);
+    out.push(new ActionRowBuilder().addComponents(
+      mk('🟢 Active',  'active',  ButtonStyle.Success),
+      mk('✅ Done',    'done',    ButtonStyle.Success),
+      mk('⏸️ Paused', 'paused',  ButtonStyle.Primary),
+      mk('⬜ Off',     'off',     ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`sl_cancel_pick_${enc}`).setLabel('← Cancel').setStyle(ButtonStyle.Secondary),
+    ));
+
+  } else if (state.step === 'advance_confirm') {
+    const enc = encodeLeague(state.leagueName);
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`sl_advance_confirm_${enc}`)
+        .setLabel('✅ Confirm reset')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`sl_advance_cancel_${enc}`)
+        .setLabel('❌ Cancel')
+        .setStyle(ButtonStyle.Secondary),
+    ));
+
+  } else if (state.step === 'reorder_a') {
+    out.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('sl_reorder_a')
+        .setPlaceholder('Move which league?')
+        .addOptions(leagues.map(name =>
+          new StringSelectMenuOptionBuilder().setLabel(name).setValue(name)
+        ))
+    ));
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary)
+    ));
+
+  } else if (state.step === 'reorder_b') {
+    out.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`sl_reorder_b_${encodeLeague(state.leagueNameA)}`)
+        .setPlaceholder('Swap with which league?')
+        .addOptions(
+          leagues
+            .filter(n => n !== state.leagueNameA)
+            .map(name => new StringSelectMenuOptionBuilder().setLabel(name).setValue(name))
+        )
+    ));
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary)
+    ));
+  }
+
+  return out;
+}
+
+// Encode league name for use in customId (spaces → hyphens, limit chars)
+function encodeLeague(name) {
+  return name.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 40);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTLIST — SELECT MENU HANDLER
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function handleSelect(interaction) {
+  const userId = interaction.user.id;
+  const id     = interaction.customId;
+  const value  = interaction.values[0];
+
+  // Only handle shortlist selects
+  if (!id.startsWith('sl_')) return;
+
+  await interaction.deferUpdate();
+
+  const types = await getOrSeedShortlistTypes(userId);
+  let { rows } = await getShortlistData(userId, types);
+  const session = activeEdits.get(userId) ?? { type: 'shortlist', step: 'main' };
+
+  // sl_action — main menu choice
+  if (id === 'sl_action') {
+    if (value === 'edit') {
+      activeEdits.set(userId, { type: 'shortlist', step: 'edit_pick' });
+      const { content: c } = buildShortlistContent(types, rows);
+      return interaction.editReply({ content: c, components: buildShortlistComponents(types, rows, { step: 'edit_pick' }) });
+    }
+    if (value === 'reorder') {
+      activeEdits.set(userId, { type: 'shortlist', step: 'reorder_a' });
+      const { content: c } = buildShortlistContent(types, rows);
+      return interaction.editReply({ content: c, components: buildShortlistComponents(types, rows, { step: 'reorder_a' }) });
+    }
+    if (value === 'add_league') {
+      const modal = new ModalBuilder()
+        .setCustomId('sl_add_league_modal')
+        .setTitle('Add League');
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('league_name_input')
+            .setLabel('League name')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(50)
+        )
+      );
+      return interaction.showModal(modal);
+    }
+  }
+
+  // sl_edit_league — picked which league to edit
+  if (id === 'sl_edit_league') {
+    const leagueName = value;
+    activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
+    const { content: c } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content: c + `\n\n✏️ Editing **${leagueName}** — tap an item to set its state:`,
+      components: buildShortlistComponents(types, rows, { step: 'edit_toggles', leagueName }),
+    });
+  }
+
+  // sl_reorder_a — picked league A to move
+  if (id === 'sl_reorder_a') {
+    const leagueNameA = value;
+    activeEdits.set(userId, { type: 'shortlist', step: 'reorder_b', leagueNameA });
+    const { content: c } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content: c + `\n\n↕️ Moving **${leagueNameA}** — swap with which league?`,
+      components: buildShortlistComponents(types, rows, { step: 'reorder_b', leagueNameA }),
+    });
+  }
+
+  // sl_reorder_b_{encodedLeagueA} — picked league B to swap with
+  if (id.startsWith('sl_reorder_b_')) {
+    const sess        = activeEdits.get(userId);
+    const leagueNameA = sess?.leagueNameA ?? '';
+    const leagueNameB = value;
+
+    const rowsA = rows.filter(r => r.league_name === leagueNameA);
+    const rowsB = rows.filter(r => r.league_name === leagueNameB);
+    const orderA = rowsA[0]?.priority_order ?? 0;
+    const orderB = rowsB[0]?.priority_order ?? 0;
+    const idsA = rowsA.map(r => r.id);
+    const idsB = rowsB.map(r => r.id);
+    if (idsA.length) await supabase.from('shortlist').update({ priority_order: orderB }).in('id', idsA);
+    if (idsB.length) await supabase.from('shortlist').update({ priority_order: orderA }).in('id', idsB);
+
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    const { content: c } = buildShortlistContent(types, freshRows);
+    return interaction.editReply({ content: c, components: buildShortlistComponents(types, freshRows, { step: 'main' }) });
+  }
+}
+
+// SHORTLIST — BUTTON HANDLERS  (called from handleButton)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function handleShortlistButton(interaction, id) {
+  const userId = interaction.user.id;
+
+  await interaction.deferUpdate();
+
+  const types = await getOrSeedShortlistTypes(userId);
+  let { rows } = await getShortlistData(userId, types);
+
+  // sl_back — return to main view
+  if (id === 'sl_back') {
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    const { content } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content,
+      components: buildShortlistComponents(types, rows, { step: 'main' }),
+    });
+  }
+
+  // sl_select_{encodedLeague}_{typeId} — user tapped an item, show state picker
+  if (id.startsWith('sl_select_')) {
+    const parts       = id.replace('sl_select_', '').split('_');
+    const typeId      = parseInt(parts[parts.length - 1]);
+    const encodedName = parts.slice(0, parts.length - 1).join('_');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    const type = types.find(t => t.id === typeId);
+
+    activeEdits.set(userId, { type: 'shortlist', step: 'item_state_pick', leagueName, typeId });
+    const { content: c } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content: c + `\n\n✏️ **${leagueName}** — set state for ${type?.icon ?? ''} **${type?.name ?? 'item'}**:`,
+      components: buildShortlistComponents(types, rows, { step: 'item_state_pick', leagueName, typeId }),
+    });
+  }
+  // sl_setstate_{guildId}_{typeId}_{state} — apply the chosen state
+  if (id.startsWith('sl_setstate_')) {
+    const withoutPrefix  = id.replace('sl_setstate_', '');
+    const lastUnderscore2 = withoutPrefix.lastIndexOf('_');
+    const newState        = withoutPrefix.slice(lastUnderscore2 + 1);
+    const remainder       = withoutPrefix.slice(0, lastUnderscore2);
+    const lastUnderscore1 = remainder.lastIndexOf('_');
+    const typeId          = parseInt(remainder.slice(lastUnderscore1 + 1));
+    const encodedName     = remainder.slice(0, lastUnderscore1);
+    const leagueName      = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+
+    const row = rows.find(r => r.league_name === leagueName && r.type_id === typeId);
+    if (row) {
+      await supabase.from('shortlist').update({ state: newState }).eq('id', row.id);
+    }
+
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
+    const { content: c } = buildShortlistContent(types, freshRows);
+    return interaction.editReply({
+      content: c + `\n\n✏️ Editing **${leagueName}**:`,
+      components: buildShortlistComponents(types, freshRows, { step: 'edit_toggles', leagueName }),
+    });
+  }
+
+  // sl_cancel_pick_{guildId} — cancel state picker, back to edit_toggles
+  if (id.startsWith('sl_cancel_pick_')) {
+    const encodedName = id.replace('sl_cancel_pick_', '');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
+    const { content: c } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content: c + `\n\n✏️ Editing **${leagueName}**:`,
+      components: buildShortlistComponents(types, rows, { step: 'edit_toggles', leagueName }),
+    });
+  }
+
+  // sl_advance_complete_{guildId} — show confirmation step
+  if (id.startsWith('sl_advance_complete_')) {
+    const encodedName = id.replace('sl_advance_complete_', '');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    activeEdits.set(userId, { type: 'shortlist', step: 'advance_confirm', leagueName });
+    const { content: c } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content: c + `\n\n⚠️ Complete Advance for **${leagueName}**?\nAll ✅ Done items will reset to Active for the new cycle. Paused and Off items are unaffected.`,
+      components: buildShortlistComponents(types, rows, { step: 'advance_confirm', leagueName }),
+    });
+  }
+
+  // sl_advance_confirm_{guildId} — execute the reset
+  if (id.startsWith('sl_advance_confirm_')) {
+    const encodedName = id.replace('sl_advance_confirm_', '');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    await supabase
+      .from('shortlist')
+      .update({ state: 'active' })
+      .eq('user_id', userId)
+      .eq('league_name', leagueName)
+      .eq('state', 'done');
+
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    const { content: c } = buildShortlistContent(types, freshRows);
+    return interaction.editReply({
+      content: `✅ Advance complete for **${leagueName}**. New cycle started — Done items are Active again.\n\n` + c,
+      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
+    });
+  }
+
+  // sl_advance_cancel_{guildId} — back to edit_toggles
+  if (id.startsWith('sl_advance_cancel_')) {
+    const encodedName = id.replace('sl_advance_cancel_', '');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
+    const { content: c } = buildShortlistContent(types, rows);
+    return interaction.editReply({
+      content: c + `\n\n✏️ Editing **${leagueName}**:`,
+      components: buildShortlistComponents(types, rows, { step: 'edit_toggles', leagueName }),
+    });
+  }
+
+  // sl_remove_league_{encodedLeague}
+  if (id.startsWith('sl_remove_league_')) {
+    const encodedName = id.replace('sl_remove_league_', '');
+    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+    await supabase.from('shortlist').delete().eq('user_id', userId).eq('league_name', leagueName);
+
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    const { content: c } = buildShortlistContent(types, freshRows);
+    return interaction.editReply({
+      content: `🗑️ **${leagueName}** removed.\n\n` + c,
+      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
+    });
+  }
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    const { content } = buildShortlistContent(types, freshRows);
+    return interaction.editReply({
+      content: `🗑️ **${guildName}** removed.\n\n` + content,
+      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
+    });
   }
 }
