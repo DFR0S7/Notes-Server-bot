@@ -67,6 +67,26 @@ export async function postTodoList(userId) {
   }
 }
 
+// ── Shortlist Post Helper ────────────────────────────────────────────────────
+// Posts the shortlist to a channel, deleting any previous shortlist message
+// from the bot in that channel (identified by the 📋 **Your Shortlist** header).
+
+async function postShortlist(channel, types, rows, activeSession) {
+  // Delete previous shortlist message in this channel if present
+  try {
+    const messages = await channel.messages.fetch({ limit: 50 });
+    const prev = messages.find(m =>
+      m.author.id === client.user.id &&
+      m.content?.startsWith('📋 **Your Shortlist**')
+    );
+    if (prev) await prev.delete().catch(() => null);
+  } catch {}
+
+  const { content } = buildShortlistContent(types, rows);
+  const components  = buildShortlistComponents(types, rows, activeSession ?? { step: 'main' });
+  return channel.send({ content, components });
+}
+
 // ── Command Handler ───────────────────────────────────────────────────────────
 export async function handleCommand(interaction) {
   const { commandName } = interaction;
@@ -219,7 +239,8 @@ export async function handleCommand(interaction) {
   // /shortlist
   if (commandName === 'shortlist') {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const userId = interaction.user.id;
+    const userId  = interaction.user.id;
+    const channel = interaction.channel;
 
     const types = await getOrSeedShortlistTypes(userId);
     let { rows } = await getShortlistData(userId, types);
@@ -241,10 +262,10 @@ export async function handleCommand(interaction) {
       }
     }
 
-    const { content } = buildShortlistContent(types, rows);
-    const components = buildShortlistComponents(types, rows, { step: 'main' });
-    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
-    return interaction.editReply({ content, components });
+    activeEdits.set(userId, { type: 'shortlist', step: 'main', channelId: channel.id });
+    await postShortlist(channel, types, rows, { step: 'main' });
+    // Acknowledge the slash command silently
+    return interaction.editReply({ content: '✅ Shortlist posted.', flags: MessageFlags.Ephemeral });
   }
 
   // /shortlist-config
@@ -895,6 +916,7 @@ export async function handleModal(interaction) {
   if (id === 'sl_add_league_modal') {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const userId     = interaction.user.id;
+    const channel    = interaction.channel;
     const leagueName = interaction.fields.getTextInputValue('league_name_input').trim();
     if (!leagueName) return interaction.editReply({ content: 'League name cannot be empty.' });
 
@@ -908,11 +930,8 @@ export async function handleModal(interaction) {
     await seedLeagueRows(userId, leagueName, types, rows);
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
-    const { content: c } = buildShortlistContent(types, freshRows);
-    return interaction.editReply({
-      content: `✅ **${leagueName}** added.\n\n` + c,
-      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
-    });
+    await postShortlist(channel, types, freshRows, { step: 'main' });
+    return interaction.editReply({ content: `✅ **${leagueName}** added.`, flags: MessageFlags.Ephemeral });
   }
 
   // modal_fill_{recruitId}_{attr}
@@ -1369,21 +1388,24 @@ export async function handleSelect(interaction) {
   const isModalAction = id === 'sl_action' && interaction.values[0] === 'add_league';
   if (!isModalAction) await interaction.deferUpdate();
 
-  const types = await getOrSeedShortlistTypes(userId);
-  let { rows } = await getShortlistData(userId, types);
+  const types   = await getOrSeedShortlistTypes(userId);
+  let { rows }  = await getShortlistData(userId, types);
   const session = activeEdits.get(userId) ?? { type: 'shortlist', step: 'main' };
+  const channel = interaction.channel;
 
   // sl_action — main menu choice
   if (id === 'sl_action') {
     if (value === 'edit') {
       activeEdits.set(userId, { type: 'shortlist', step: 'edit_pick' });
       const { content: c } = buildShortlistContent(types, rows);
-      return interaction.editReply({ content: c, components: buildShortlistComponents(types, rows, { step: 'edit_pick' }) });
+      await postShortlist(channel, types, rows, { step: 'edit_pick' });
+    return interaction.editReply({ content: '✅', flags: 64 });
     }
     if (value === 'reorder') {
       activeEdits.set(userId, { type: 'shortlist', step: 'reorder_a' });
       const { content: c } = buildShortlistContent(types, rows);
-      return interaction.editReply({ content: c, components: buildShortlistComponents(types, rows, { step: 'reorder_a' }) });
+      await postShortlist(channel, types, rows, { step: 'reorder_a' });
+    return interaction.editReply({ content: '✅', flags: 64 });
     }
     if (value === 'add_league') {
       const modal = new ModalBuilder()
@@ -1408,10 +1430,8 @@ export async function handleSelect(interaction) {
     const leagueName = value;
     activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
     const { content: c } = buildShortlistContent(types, rows);
-    return interaction.editReply({
-      content: c + `\n\n✏️ Editing **${leagueName}** — tap an item to set its state:`,
-      components: buildShortlistComponents(types, rows, { step: 'edit_toggles', leagueName }),
-    });
+    await postShortlist(channel, types, rows, { step: 'edit_toggles', leagueName });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
 
   // sl_reorder_a — picked which league to move, now pick destination position
@@ -1421,10 +1441,8 @@ export async function handleSelect(interaction) {
     const { content: c } = buildShortlistContent(types, rows);
     const leagueNames = [...new Set(rows.map(r => r.league_name))];
     const currentPos  = leagueNames.indexOf(leagueNameA) + 1;
-    return interaction.editReply({
-      content: c + `\n\n↕️ Moving **${leagueNameA}** (position ${currentPos}) — move to which position?`,
-      components: buildShortlistComponents(types, rows, { step: 'reorder_b', leagueNameA }),
-    });
+    await postShortlist(channel, types, rows, { step: 'reorder_b', leagueNameA });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
 
   // sl_reorder_b_{encodedLeagueA} — picked destination position, shift other leagues
@@ -1446,7 +1464,8 @@ export async function handleSelect(interaction) {
       // No-op — already there or not found
       activeEdits.set(userId, { type: 'shortlist', step: 'main' });
       const { content: c } = buildShortlistContent(types, rows);
-      return interaction.editReply({ content: c, components: buildShortlistComponents(types, rows, { step: 'main' }) });
+      await postShortlist(channel, types, rows, { step: 'main' });
+    return interaction.editReply({ content: '✅', flags: 64 });
     }
 
     // Remove league from current position and insert at destination
@@ -1467,7 +1486,8 @@ export async function handleSelect(interaction) {
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
     const { content: c } = buildShortlistContent(types, freshRows);
-    return interaction.editReply({ content: c, components: buildShortlistComponents(types, freshRows, { step: 'main' }) });
+    await postShortlist(channel, types, freshRows, { step: 'main' });
+    return interaction.editReply({ content: '✅', flags: 64 });
   }
 }
 
@@ -1479,8 +1499,9 @@ export async function handleShortlistButton(interaction, id) {
 
   await interaction.deferUpdate();
 
-  const types = await getOrSeedShortlistTypes(userId);
-  let { rows } = await getShortlistData(userId, types);
+  const types   = await getOrSeedShortlistTypes(userId);
+  let { rows }  = await getShortlistData(userId, types);
+  const channel = interaction.channel;
 
   // sl_back — return to main view
   if (id === 'sl_back') {
@@ -1502,10 +1523,8 @@ export async function handleShortlistButton(interaction, id) {
 
     activeEdits.set(userId, { type: 'shortlist', step: 'item_state_pick', leagueName, typeId });
     const { content: c } = buildShortlistContent(types, rows);
-    return interaction.editReply({
-      content: c + `\n\n✏️ **${leagueName}** — set state for ${type?.icon ?? ''} **${type?.name ?? 'item'}**:`,
-      components: buildShortlistComponents(types, rows, { step: 'item_state_pick', leagueName, typeId }),
-    });
+    await postShortlist(channel, types, rows, { step: 'item_state_pick', leagueName, typeId });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
   // sl_setstate_{guildId}_{typeId}_{state} — apply the chosen state
   if (id.startsWith('sl_setstate_')) {
@@ -1526,10 +1545,8 @@ export async function handleShortlistButton(interaction, id) {
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
     const { content: c } = buildShortlistContent(types, freshRows);
-    return interaction.editReply({
-      content: c + `\n\n✏️ Editing **${leagueName}**:`,
-      components: buildShortlistComponents(types, freshRows, { step: 'edit_toggles', leagueName }),
-    });
+    await postShortlist(channel, types, freshRows, { step: 'edit_toggles', leagueName });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
 
   // sl_cancel_pick_{guildId} — cancel state picker, back to edit_toggles
@@ -1538,10 +1555,8 @@ export async function handleShortlistButton(interaction, id) {
     const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
     activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
     const { content: c } = buildShortlistContent(types, rows);
-    return interaction.editReply({
-      content: c + `\n\n✏️ Editing **${leagueName}**:`,
-      components: buildShortlistComponents(types, rows, { step: 'edit_toggles', leagueName }),
-    });
+    await postShortlist(channel, types, rows, { step: 'edit_toggles', leagueName });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
 
   // sl_advance_complete_{guildId} — show confirmation step
@@ -1550,10 +1565,8 @@ export async function handleShortlistButton(interaction, id) {
     const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
     activeEdits.set(userId, { type: 'shortlist', step: 'advance_confirm', leagueName });
     const { content: c } = buildShortlistContent(types, rows);
-    return interaction.editReply({
-      content: c + `\n\n⚠️ Complete Advance for **${leagueName}**?\nAll ✅ Done items will reset to Active for the new cycle. Paused and Off items are unaffected.`,
-      components: buildShortlistComponents(types, rows, { step: 'advance_confirm', leagueName }),
-    });
+    await postShortlist(channel, types, rows, { step: 'advance_confirm', leagueName });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
 
   // sl_advance_confirm_{guildId} — execute the reset
@@ -1570,10 +1583,8 @@ export async function handleShortlistButton(interaction, id) {
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
     const { content: c } = buildShortlistContent(types, freshRows);
-    return interaction.editReply({
-      content: `✅ Advance complete for **${leagueName}**. New cycle started — Done items are Active again.\n\n` + c,
-      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
-    });
+    await postShortlist(channel, types, freshRows, { step: 'main' });
+    return interaction.editReply({ content: `✅ Advance complete for **${leagueName}**. New cycle started — Done items are Active again., flags: 64 });
   }
 
   // sl_advance_cancel_{guildId} — back to edit_toggles
@@ -1582,10 +1593,8 @@ export async function handleShortlistButton(interaction, id) {
     const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
     activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
     const { content: c } = buildShortlistContent(types, rows);
-    return interaction.editReply({
-      content: c + `\n\n✏️ Editing **${leagueName}**:`,
-      components: buildShortlistComponents(types, rows, { step: 'edit_toggles', leagueName }),
-    });
+    await postShortlist(channel, types, rows, { step: 'edit_toggles', leagueName });
+    return interaction.editReply({ content: c + `, flags: 64 });
   }
 
   // sl_remove_league_{encodedLeague}
@@ -1597,9 +1606,7 @@ export async function handleShortlistButton(interaction, id) {
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
     const { content: c } = buildShortlistContent(types, freshRows);
-    return interaction.editReply({
-      content: `🗑️ **${leagueName}** removed.\n\n` + c,
-      components: buildShortlistComponents(types, freshRows, { step: 'main' }),
-    });
+    await postShortlist(channel, types, freshRows, { step: 'main' });
+    return interaction.editReply({ content: `🗑️ **${leagueName}** removed.`, flags: 64 });
   }
 }
