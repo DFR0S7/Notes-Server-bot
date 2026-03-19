@@ -133,34 +133,48 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
   const top    = Math.max(0, Math.round(h * (yC - halfH)));
   const width  = Math.round(w * (x2 - x1));
   const height = Math.min(h - top, Math.round(h * halfH * 2));
-  const tmpPath = join(tmpdir(), `recruit_cell_${suffix}_${Date.now()}.png`);
 
+  // Save a normalised (autocontrast) version — threshold applied per-pass in ocrCell
+  const tmpPath = join(tmpdir(), `recruit_cell_${suffix}_${Date.now()}.png`);
   await sharp(srcPath)
     .extract({ left, top, width, height })
     .greyscale()
-    .normalise()      // autocontrast: stretches brightness range to 0-255 per cell
-    .threshold(160)   // now reliably separates number glyphs from dark bg regardless of team color
-    .negate()         // flip → black text on white background for Tesseract
-    .resize({ width: width * 8, kernel: 'nearest' })
+    .normalise()      // stretch brightness range per-cell regardless of team color
     .toFile(tmpPath);
 
-  return tmpPath;
+  return { tmpPath, width, height };
 }
 
-async function ocrCell(worker, imgPath) {
-  const result = await worker.recognize(imgPath);
-  const raw = result.data.text.replace(/\s+/g, '').replace(/[^0-9]/g, '');
+async function ocrCell(worker, cellData) {
+  const { tmpPath, width } = cellData;
 
-  for (const m of (raw.match(/\d{2,3}/g) || [])) {
-    const n = parseInt(m);
-    if (n >= 50 && n <= 99) return n;
-    // 3-digit rescue: try last-two then first+last
-    if (m.length === 3) {
-      const lastTwo   = parseInt(m[1] + m[2]);
-      const firstLast = parseInt(m[0] + m[2]);
-      if (lastTwo   >= 50 && lastTwo   <= 99) return lastTwo;
-      if (firstLast >= 50 && firstLast <= 99) return firstLast;
+  // Two-pass threshold: 160 first (avoids over-thresholding most values),
+  // then 170 as fallback (rescues dim glyphs like "7" in 71/72/74/77 etc.)
+  for (const thresh of [160, 170]) {
+    const tmpThresh = tmpPath.replace('.png', `_t${thresh}.png`);
+    await sharp(tmpPath)
+      .threshold(thresh)
+      .negate()
+      .resize({ width: width * 8, kernel: 'nearest' })
+      .toFile(tmpThresh);
+
+    const result = await worker.recognize(tmpThresh);
+    const raw = result.data.text.replace(/\s+/g, '').replace(/[^0-9]/g, '');
+
+    for (const m of (raw.match(/\d{2,3}/g) || [])) {
+      const n = parseInt(m);
+      if (n >= 50 && n <= 99) {
+        try { unlinkSync(tmpThresh); } catch {}
+        return n;
+      }
+      if (m.length === 3) {
+        const lastTwo   = parseInt(m[1] + m[2]);
+        const firstLast = parseInt(m[0] + m[2]);
+        if (lastTwo   >= 50 && lastTwo   <= 99) { try { unlinkSync(tmpThresh); } catch {} return lastTwo; }
+        if (firstLast >= 50 && firstLast <= 99) { try { unlinkSync(tmpThresh); } catch {} return firstLast; }
+      }
     }
+    try { unlinkSync(tmpThresh); } catch {}
   }
   return null;
 }
@@ -450,7 +464,7 @@ export async function performOCR(imageUrl) {
   try {
     // 1. OCR the 10 number cells
     const ocrResults = await Promise.allSettled(
-      cellPaths.map(p => p ? ocrCell(worker, p) : Promise.resolve(null))
+      cellPaths.map(c => c ? ocrCell(worker, c) : Promise.resolve(null))
     );
     values = ocrResults.map(r => r.status === 'fulfilled' ? r.value : null);
     console.log('Grid values [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]:', values);
@@ -466,7 +480,7 @@ export async function performOCR(imageUrl) {
   } finally {
     await worker.terminate();
     try { unlinkSync(tmpRaw); } catch {}
-    for (const p of cellPaths) if (p) try { unlinkSync(p); } catch {}
+    for (const c of cellPaths) if (c) try { unlinkSync(c.tmpPath); } catch {}
   }
 
   return { values, name, position, archetype };
