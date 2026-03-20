@@ -198,10 +198,12 @@ async function extractName(srcPath, w, h, worker) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function extractPositionArchetype(srcPath, w, h, archetypeList, worker) {
-  const left   = Math.round(w * 0.38);
-  const top    = Math.round(h * 0.18);
-  const width  = Math.round(w * 0.52);
-  const height = Math.round(h * 0.12);
+  // Dedicated position/archetype label boxes (confirmed for 3840×2160)
+  // x=68-84%, y=12-32% — captures both the POSITION box and ARCHETYPE box
+  const left   = Math.round(w * 0.68);
+  const top    = Math.round(h * 0.12);
+  const width  = Math.round(w * 0.16);
+  const height = Math.round(h * 0.20);
   const tmpPath = join(tmpdir(), `recruit_meta_${Date.now()}.png`);
 
   try {
