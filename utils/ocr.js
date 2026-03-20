@@ -147,7 +147,7 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
 async function ocrCell(worker, cellData) {
   const { tmpPath, width } = cellData;
 
-  for (const thresh of [100, 130, 160]) {
+  for (const thresh of [101, 131, 161]) {
     const tmpThresh = tmpPath.replace('.png', `_t${thresh}.png`);
     await sharp(tmpPath)
       .threshold(thresh)
@@ -157,7 +157,6 @@ async function ocrCell(worker, cellData) {
 
     const result = await worker.recognize(tmpThresh);
     const raw = result.data.text.replace(/\s+/g, '').replace(/[^0-9]/g, '');
-    console.log(`  ocrCell [${tmpPath.split('_').slice(-2,-1)[0]}] thresh=${thresh} raw='${result.data.text.trim()}' digits='${raw}'`);
 
     for (const m of (raw.match(/\d{2,3}/g) || [])) {
       const n = parseInt(m);
