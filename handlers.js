@@ -601,7 +601,7 @@ async function runAnalysis(interaction, session, position, archetype) {
     activeEdits.set(interaction.user.id, { type: 'filling_missing', id: recruit.id, missing, filled: 0, hasName: !!recruitName });
     const missingList = missing.map(a => '`' + a + '`').join(', ');
     return interaction.editReply({
-      content: '📋 Found **' + foundCount + '/' + configuredAttrs.length + '** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nMissing: ' + missingList + '\n\nClick below to enter the first missing value:',
+      content: '📋 Found **' + foundCount + '/' + configuredAttrs.length + '** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nMissing: ' + missingList + '\n\nClick below to confirm or correct the value (pre-filled as **71** — the most common unread value):',
       embeds: [createAnalysisEmbed(recruit)],
       components: [getMissingAttrRow(recruit.id, missing[0])],
     });
@@ -679,7 +679,7 @@ export async function handleButton(interaction) {
       .setStyle(TextInputStyle.Short)
       .setMinLength(2)
       .setMaxLength(2)
-      .setPlaceholder('e.g. 91')
+      .setValue('71')
       .setRequired(true);
 
     modal.addComponents(new ActionRowBuilder().addComponents(input));
