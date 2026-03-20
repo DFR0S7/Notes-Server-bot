@@ -517,8 +517,8 @@ async function refreshTodoMessage(interaction, filter = '') {
 }
 
 // ── Missing Attr Button Row ───────────────────────────────────────────────────
-function getMissingAttrRow(recruitId, attr) {
-  return new ActionRowBuilder().addComponents(
+function getMissingAttrRow(recruitId, attr, totalMissing = 1) {
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('fill_attr_' + recruitId + '_' + attr)
       .setLabel('Enter ' + attr)
@@ -528,6 +528,16 @@ function getMissingAttrRow(recruitId, attr) {
       .setLabel('Skip')
       .setStyle(ButtonStyle.Secondary),
   );
+  // Only show "Fill all as 71" when there are multiple missing attributes
+  if (totalMissing > 1) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('fill_all_71_' + recruitId)
+        .setLabel('Fill all as 71')
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+  return row;
 }
 
 
@@ -603,7 +613,7 @@ async function runAnalysis(interaction, session, position, archetype) {
     return interaction.editReply({
       content: '📋 Found **' + foundCount + '/' + configuredAttrs.length + '** attributes' + (recruitName ? ' for **' + recruitName + '**' : '') + '.\n\nMissing: ' + missingList + '\n\nClick below to confirm or correct the value (pre-filled as **71** — the most common unread value):',
       embeds: [createAnalysisEmbed(recruit)],
-      components: [getMissingAttrRow(recruit.id, missing[0])],
+      components: [getMissingAttrRow(recruit.id, missing[0], missing.length)],
     });
   } else if (recruitName) {
     activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruit.id });
@@ -692,6 +702,37 @@ export async function handleButton(interaction) {
     const recruitId = parseInt(parts[0]);
     const attr      = parts.slice(1).join('_');
     return advanceMissingFill(interaction, recruitId, attr, null);
+  }
+
+  // fill_all_71_{recruitId} — fill every remaining missing attribute as 71
+  if (id.startsWith('fill_all_71_')) {
+    const recruitId = parseInt(id.replace('fill_all_71_', ''));
+    const session   = activeEdits.get(interaction.user.id);
+    if (!session || session.type !== 'filling_missing' || session.id !== recruitId) {
+      return interaction.update({ content: 'Session expired. Please scan again.', components: [] });
+    }
+    await interaction.deferUpdate();
+
+    // Fill all remaining missing attributes with 71
+    const remaining = session.missing.slice(session.filled);
+    for (const attr of remaining) {
+      await supabase.from('recruits').update({ [attr.toLowerCase()]: 71 }).eq('id', recruitId);
+    }
+
+    // Mark all as filled and proceed to confirmation
+    session.filled = session.missing.length;
+    activeEdits.set(interaction.user.id, session);
+
+    // Re-fetch recruit and run analysis
+    const { data: recruit } = await supabase.from('recruits').select('*').eq('id', recruitId).single();
+    if (!recruit) return interaction.editReply({ content: 'Recruit not found.', components: [] });
+
+    activeEdits.set(interaction.user.id, { type: 'analyze_confirm', id: recruitId });
+    return interaction.editReply({
+      content: 'All missing attributes filled as **71** ✅' + (session.hasName ? '' : '\n\nConfirm to calculate fit score:'),
+      embeds: [createAnalysisEmbed(recruit)],
+      components: [getConfirmRow(recruitId)],
+    });
   }
 
   if (id.startsWith('analyze_pos_')) {
@@ -903,7 +944,7 @@ async function advanceMissingFill(interaction, recruitId, attr, value) {
       content: (value !== null ? '✅ **' + attr + '** set to **' + value + '**.\n\n' : '⏭️ Skipped **' + attr + '**.\n\n') +
         '**' + remaining + '** attribute' + (remaining > 1 ? 's' : '') + ' remaining. Enter value for **' + nextAttr + '**:',
       embeds: [],
-      components: [getMissingAttrRow(recruitId, nextAttr)],
+      components: [getMissingAttrRow(recruitId, nextAttr, session.missing.length - nextFilled)],
     });
   }
 
