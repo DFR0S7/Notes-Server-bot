@@ -602,6 +602,10 @@ async function runAnalysis(interaction, session, position, archetype) {
   const missingFromOCR = configuredAttrs.filter(a => !(a in allAttrs));
   activeEdits.delete(interaction.user.id);
 
+  console.log('configuredAttrs:', configuredAttrs);
+  console.log('allAttrs keys:', Object.keys(allAttrs));
+  console.log('attributes keys:', Object.keys(attributes));
+
   if (Object.keys(attributes).length === 0) {
     return interaction.editReply({ content: 'No ratings found. Make sure the screenshot clearly shows the attribute grid.' });
   }
