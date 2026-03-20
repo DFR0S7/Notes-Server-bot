@@ -150,7 +150,7 @@ async function ocrCell(worker, cellData) {
 
   // Two-pass threshold: 160 first (avoids over-thresholding most values),
   // then 170 as fallback (rescues dim glyphs like "7" in 71/72/74/77 etc.)
-  for (const thresh of [160, 170]) {
+  for (const thresh of [160, 170, 180]) {
     const tmpThresh = tmpPath.replace('.png', `_t${thresh}.png`);
     await sharp(tmpPath)
       .threshold(thresh)
