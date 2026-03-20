@@ -139,8 +139,7 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
   await sharp(srcPath)
     .extract({ left, top, width, height })
     .greyscale()
-    .normalise()      // stretch brightness range per-cell regardless of team color
-    .toFile(tmpPath);
+    .toFile(tmpPath);  // raw greyscale — threshold applied per-pass in ocrCell
 
   return { tmpPath, width, height };
 }
@@ -148,13 +147,7 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
 async function ocrCell(worker, cellData) {
   const { tmpPath, width } = cellData;
 
-  // Ensure digit-only mode for every cell — worker params may have shifted
-  await worker.setParameters({
-    tessedit_pageseg_mode: '8',
-    tessedit_char_whitelist: '0123456789',
-  });
-
-  for (const thresh of [160, 170, 180]) {
+  for (const thresh of [100, 130, 160]) {
     const tmpThresh = tmpPath.replace('.png', `_t${thresh}.png`);
     await sharp(tmpPath)
       .threshold(thresh)
