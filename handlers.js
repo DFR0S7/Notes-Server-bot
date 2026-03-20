@@ -6,36 +6,9 @@ import {
   createAnalysisEmbed, createBreakdownEmbed, createConfigEmbed,
   createRangeSummaryEmbed, createRecruitDetailEmbed, calculateFit, getAttributeOrder, getKeepDumpRow,
   SHORTLIST_STARTER_TYPES, shortlistRowColor, shortlistRowText,
+  normalizeAttrKey, normalizeRanges,
 } from './utils.js';
 import { activeEdits, client } from './index.js';
-
-// ── Attribute name → abbreviation map (for config key normalization) ──────────
-const ATTR_NAME_TO_ABBREV = {
-  'awareness': 'AWR', 'speed': 'SPD', 'acceleration': 'ACC', 'agility': 'AGI',
-  'strength': 'STR', 'jump': 'JMP', 'stamina': 'STA', 'injury': 'INJ',
-  'throw power': 'THP', 'short accuracy': 'SAC', 'medium accuracy': 'MAC',
-  'deep accuracy': 'DAC', 'throw on run': 'TOR', 'under pressure': 'TUP',
-  'play action': 'PAC', 'break sack': 'BSK', 'carrying': 'CAR',
-  'catching': 'CTH', 'catch in traffic': 'CIT', 'spectacular catch': 'SPC',
-  'route running': 'RTE', 'short route': 'SRR', 'med route': 'MRR',
-  'deep route': 'DRR', 'release': 'RLS', 'break tackle': 'BTK',
-  'trucking': 'TRK', 'elusiveness': 'ELU', 'bc vision': 'BCV',
-  'spin move': 'SPM', 'juke move': 'JKM', 'change of direction': 'COD',
-  'stiff arm': 'SFA', 'tackle': 'TAK', 'tackling': 'TAK',
-  'hit power': 'HPW', 'pursuit': 'PUR', 'play recognition': 'PRC',
-  'man coverage': 'MCV', 'zone coverage': 'ZCV', 'press': 'PRS',
-  'power moves': 'PMV', 'finesse moves': 'FMV', 'block shedding': 'BSH',
-  'pass block': 'PBK', 'run block': 'RBK', 'pass block power': 'PBP',
-  'pass block finesse': 'PBF', 'run block power': 'RBP', 'run block finesse': 'RBF',
-  'lead block': 'LBK', 'impact blocking': 'IBL',
-  'kick power': 'KPW', 'kick accuracy': 'KAC', 'kick return': 'KRT',
-};
-
-function normalizeAttrKey(key) {
-  // If already an abbreviation (all caps, ≤3 chars), keep it
-  if (/^[A-Z]{2,3}$/.test(key)) return key;
-  return ATTR_NAME_TO_ABBREV[key.toLowerCase()] || key;
-}
 
 
 
@@ -1260,7 +1233,8 @@ export async function handleMessage(message) {
       .from('archetypes').select('ranges')
       .eq('position', session.position).eq('archetype', session.archetype).single();
 
-    const ranges = { ...arch.ranges, ...updates };
+    // Normalize both existing and new keys to abbreviations before saving
+    const ranges = normalizeRanges({ ...arch.ranges, ...updates });
     await supabase.from('archetypes')
       .update({ ranges })
       .eq('position', session.position).eq('archetype', session.archetype);

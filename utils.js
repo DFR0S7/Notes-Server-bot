@@ -1,6 +1,44 @@
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { supabase } from './supabase.js';
 
+// ── Attribute key normalization ───────────────────────────────────────────────
+// Ranges may be stored with full names (e.g. "Speed") or abbreviations ("SPD").
+// This map + helper normalizes everything to abbreviations consistently.
+const ATTR_NAME_TO_ABBREV = {
+  'awareness': 'AWR', 'speed': 'SPD', 'acceleration': 'ACC', 'agility': 'AGI',
+  'strength': 'STR', 'jump': 'JMP', 'stamina': 'STA', 'injury': 'INJ',
+  'throw power': 'THP', 'short accuracy': 'SAC', 'medium accuracy': 'MAC',
+  'deep accuracy': 'DAC', 'throw on run': 'TOR', 'under pressure': 'TUP',
+  'play action': 'PAC', 'break sack': 'BSK', 'carrying': 'CAR',
+  'catching': 'CTH', 'catch in traffic': 'CIT', 'spectacular catch': 'SPC',
+  'route running': 'RTE', 'short route': 'SRR', 'med route': 'MRR',
+  'deep route': 'DRR', 'release': 'RLS', 'break tackle': 'BTK',
+  'trucking': 'TRK', 'elusiveness': 'ELU', 'bc vision': 'BCV',
+  'spin move': 'SPM', 'juke move': 'JKM', 'change of direction': 'COD',
+  'stiff arm': 'SFA', 'tackle': 'TAK', 'tackling': 'TAK',
+  'hit power': 'HPW', 'pursuit': 'PUR', 'play recognition': 'PRC',
+  'man coverage': 'MCV', 'zone coverage': 'ZCV', 'press': 'PRS',
+  'power moves': 'PMV', 'finesse moves': 'FMV', 'block shedding': 'BSH',
+  'pass block': 'PBK', 'run block': 'RBK', 'pass block power': 'PBP',
+  'pass block finesse': 'PBF', 'run block power': 'RBP', 'run block finesse': 'RBF',
+  'lead block': 'LBK', 'impact blocking': 'IBL',
+  'kick power': 'KPW', 'kick accuracy': 'KAC', 'kick return': 'KRT',
+};
+
+export function normalizeAttrKey(key) {
+  if (/^[A-Z]{2,3}$/.test(key)) return key;
+  return ATTR_NAME_TO_ABBREV[key.toLowerCase()] || key;
+}
+
+export function normalizeRanges(ranges) {
+  if (!ranges) return {};
+  return Object.fromEntries(
+    Object.entries(ranges).map(([k, v]) => [normalizeAttrKey(k), v])
+  );
+}
+
+
+
 // ── CFB26 Positions & Archetypes ─────────────────────────────────────────────
 export const POSITIONS = ['QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH'];
 
@@ -174,7 +212,7 @@ export function createBreakdownEmbed(recruit, score, breakdown, warning = null) 
 }
 
 export function createConfigEmbed(position, archetype, ranges) {
-  const entries = Object.entries(ranges);
+  const entries = Object.entries(normalizeRanges(ranges));
   const rangeText = entries.length
     ? entries.map(([k, v]) => '**' + k + '**: ' + v.min + ' - ' + v.max).join('\n')
     : '_No ranges set yet. Click Edit Ranges to add some._';
@@ -199,8 +237,9 @@ export function createRangeSummaryEmbed(position, archetype, ranges) {
   }
 
   const order = getAttributeOrder(position, archetype);
+  const normRanges = normalizeRanges(ranges);
   const sortedEntries = order
-    ? order.filter(k => k in ranges).map(k => [k, ranges[k]])
+    ? order.filter(k => k in normRanges).map(k => [k, normRanges[k]])
     : entries;
 
   return new EmbedBuilder()
@@ -252,7 +291,7 @@ export async function calculateFit(position, archetype, attributes) {
     return { score: 0, breakdown: [], warning: 'No ranges configured for this archetype. Use /config first.' };
   }
 
-  const ranges = arch.ranges || {};
+  const ranges = normalizeRanges(arch.ranges);
   const breakdown = [];
   let matched = 0, total = 0;
 
