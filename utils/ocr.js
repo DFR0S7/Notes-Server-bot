@@ -148,8 +148,12 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
 async function ocrCell(worker, cellData) {
   const { tmpPath, width } = cellData;
 
-  // Two-pass threshold: 160 first (avoids over-thresholding most values),
-  // then 170 as fallback (rescues dim glyphs like "7" in 71/72/74/77 etc.)
+  // Ensure digit-only mode for every cell — worker params may have shifted
+  await worker.setParameters({
+    tessedit_pageseg_mode: '8',
+    tessedit_char_whitelist: '0123456789',
+  });
+
   for (const thresh of [160, 170, 180]) {
     const tmpThresh = tmpPath.replace('.png', `_t${thresh}.png`);
     await sharp(tmpPath)
@@ -462,11 +466,15 @@ export async function performOCR(imageUrl) {
   let values, name = null, position = null, archetype = null;
 
   try {
-    // 1. OCR the 10 number cells
-    const ocrResults = await Promise.allSettled(
-      cellPaths.map(c => c ? ocrCell(worker, c) : Promise.resolve(null))
-    );
-    values = ocrResults.map(r => r.status === 'fulfilled' ? r.value : null);
+    // 1. OCR the 10 number cells — sequential to avoid worker param conflicts
+    values = [];
+    for (const c of cellPaths) {
+      try {
+        values.push(c ? await ocrCell(worker, c) : null);
+      } catch {
+        values.push(null);
+      }
+    }
     console.log('Grid values [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]:', values);
 
     // 2. Name — original crop + parse logic, completely separate
