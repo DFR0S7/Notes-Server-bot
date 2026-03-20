@@ -9,6 +9,36 @@ import {
 } from './utils.js';
 import { activeEdits, client } from './index.js';
 
+// ── Attribute name → abbreviation map (for config key normalization) ──────────
+const ATTR_NAME_TO_ABBREV = {
+  'awareness': 'AWR', 'speed': 'SPD', 'acceleration': 'ACC', 'agility': 'AGI',
+  'strength': 'STR', 'jump': 'JMP', 'stamina': 'STA', 'injury': 'INJ',
+  'throw power': 'THP', 'short accuracy': 'SAC', 'medium accuracy': 'MAC',
+  'deep accuracy': 'DAC', 'throw on run': 'TOR', 'under pressure': 'TUP',
+  'play action': 'PAC', 'break sack': 'BSK', 'carrying': 'CAR',
+  'catching': 'CTH', 'catch in traffic': 'CIT', 'spectacular catch': 'SPC',
+  'route running': 'RTE', 'short route': 'SRR', 'med route': 'MRR',
+  'deep route': 'DRR', 'release': 'RLS', 'break tackle': 'BTK',
+  'trucking': 'TRK', 'elusiveness': 'ELU', 'bc vision': 'BCV',
+  'spin move': 'SPM', 'juke move': 'JKM', 'change of direction': 'COD',
+  'stiff arm': 'SFA', 'tackle': 'TAK', 'tackling': 'TAK',
+  'hit power': 'HPW', 'pursuit': 'PUR', 'play recognition': 'PRC',
+  'man coverage': 'MCV', 'zone coverage': 'ZCV', 'press': 'PRS',
+  'power moves': 'PMV', 'finesse moves': 'FMV', 'block shedding': 'BSH',
+  'pass block': 'PBK', 'run block': 'RBK', 'pass block power': 'PBP',
+  'pass block finesse': 'PBF', 'run block power': 'RBP', 'run block finesse': 'RBF',
+  'lead block': 'LBK', 'impact blocking': 'IBL',
+  'kick power': 'KPW', 'kick accuracy': 'KAC', 'kick return': 'KRT',
+};
+
+function normalizeAttrKey(key) {
+  // If already an abbreviation (all caps, ≤3 chars), keep it
+  if (/^[A-Z]{2,3}$/.test(key)) return key;
+  return ATTR_NAME_TO_ABBREV[key.toLowerCase()] || key;
+}
+
+
+
 // ── Live Todo List ─────────────────────────────────────────────────────────────
 export async function postTodoList(userId) {
   // Get configured channel
@@ -559,7 +589,7 @@ async function runAnalysis(interaction, session, position, archetype) {
     .single();
 
   console.log(`runAnalysis lookup: pos='${lookupPos}' arch='${archetype}' → found=${!!arch} keys=${arch?.ranges ? Object.keys(arch.ranges).length : 0} err=${archErr?.message ?? 'none'}`);
-  const configuredAttrs = arch?.ranges ? Object.keys(arch.ranges) : [];
+  const configuredAttrs = arch?.ranges ? Object.keys(arch.ranges).map(normalizeAttrKey) : [];
 
   if (configuredAttrs.length === 0) {
     return interaction.editReply({
