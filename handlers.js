@@ -542,13 +542,23 @@ function getMissingAttrRow(recruitId, attr, totalMissing = 1) {
 
 
 async function runAnalysis(interaction, session, position, archetype) {
-  const { data: arch } = await supabase
+  // Normalize display positions to canonical before DB lookup
+  const POS_NORMALIZE = {
+    MIKE: 'LB', SAM: 'LB', WILL: 'LB',
+    RT: 'OT', LT: 'OT', LG: 'OG', RG: 'OG',
+    FS: 'S', SS: 'S',
+    LEDG: 'DE', REDG: 'DE',
+  };
+  const lookupPos = POS_NORMALIZE[position.toUpperCase()] || position.toUpperCase();
+
+  const { data: arch, error: archErr } = await supabase
     .from('archetypes')
     .select('ranges')
-    .eq('position', position.toUpperCase())
+    .eq('position', lookupPos)
     .eq('archetype', archetype)
     .single();
 
+  console.log(`runAnalysis lookup: pos='${lookupPos}' arch='${archetype}' → found=${!!arch} keys=${arch?.ranges ? Object.keys(arch.ranges).length : 0} err=${archErr?.message ?? 'none'}`);
   const configuredAttrs = arch?.ranges ? Object.keys(arch.ranges) : [];
 
   if (configuredAttrs.length === 0) {
