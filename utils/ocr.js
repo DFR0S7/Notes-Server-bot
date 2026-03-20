@@ -151,6 +151,9 @@ async function ocrCell(worker, imgPath) {
       if (firstLast >= 50 && firstLast <= 99) return firstLast;
     }
   }
+  // Log null results so we can see what Tesseract actually returned
+  const suffix = imgPath.match(/recruit_cell_([^_]+)/)?.[1] ?? '?';
+  console.log(`  null cell [${suffix}]: raw text='${result.data.text.trim()}' digits='${raw}'`);
   return null;
 }
 
