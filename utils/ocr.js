@@ -7,20 +7,24 @@ import sharp from 'sharp';
 import { supabase } from '../supabase.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GRID CONSTANTS  (calibrated against 3840×2160 screenshots)
+// GRID CONSTANTS  (calibrated against 3840×2160 screenshots, multiple teams)
+// X bounds target ONLY the number glyphs, not the attribute label text.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GRID_L_X1   = 0.526;   // left column  start  (x%)
-const GRID_L_X2   = 0.556;   // left column  end
-const GRID_R_X1   = 0.630;   // right column start
-const GRID_R_X2   = 0.660;   // right column end
+const GRID_L_X1    = 0.526;   // left column  start
+const GRID_L_X2    = 0.556;   // left column  end
+const GRID_R_X1    = 0.630;   // right column start
+const GRID_R_X2    = 0.660;   // right column end
 
+// Number row y-centres — TALL glyph cluster centres, not label rows.
+// Gap between rows is uniform ~140px at 2160p. Verified 10/10 on 8186.jpg.
 const GRID_ROW_Y    = [0.4958, 0.5611, 0.6259, 0.6907, 0.7556];
 const GRID_ROW_HALF = 0.020;   // ±2.0% → ~43 px at 2160 p
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KNOWN POSITIONS
+// POSITION / ARCHETYPE CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
+
 const VALID_POSITIONS = [
   'QB','HB','WR','TE','OT','OG','C','DE','DT','LB','CB','S','ATH',
   'RT','LT','LG','RG','FS','SS','LEDG','REDG','SAM','WILL','MIKE',
@@ -49,7 +53,7 @@ const FALLBACK_ARCHETYPES = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FUZZY / AUTOCOMPLETE HELPERS
+// FUZZY AUTOCOMPLETE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 function normalise(str) {
@@ -127,7 +131,7 @@ async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
     .greyscale()
     .threshold(100)
     .negate()
-    .resize({ width: width * 5, kernel: 'nearest' })
+    .resize({ width: width * 8, kernel: 'nearest' })
     .toFile(tmpPath);
 
   return tmpPath;
@@ -151,15 +155,54 @@ async function ocrCell(worker, imgPath) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HEADER EXTRACTION (position, archetype, name)
+// NAME EXTRACTION  (x 45–72%, y 12–25%)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function extractHeader(srcPath, w, h, archetypeList, worker) {
+async function extractName(srcPath, w, h, worker) {
+  const nameLeft   = Math.floor(w * 0.45);
+  const nameTop    = Math.floor(h * 0.12);
+  const nameWidth  = Math.floor(w * 0.27);
+  const nameHeight = Math.floor(h * 0.13);
+
+  if (nameWidth < 10 || nameHeight < 10) return null;
+
+  const tmpName = join(tmpdir(), `recruit_name_${Date.now()}.png`);
+  try {
+    await sharp(srcPath)
+      .extract({ left: nameLeft, top: nameTop, width: nameWidth, height: nameHeight })
+      .greyscale().normalise()
+      .resize({ width: nameWidth * 2, kernel: 'cubic' })
+      .toFile(tmpName);
+
+    await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_whitelist: '' });
+    const nameResult = await worker.recognize(tmpName);
+
+    const SKIP_WORDS = /^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|DE|DT|LB|CB|SS|FS)$/;
+    const recruitName = nameResult.data.text
+      .split('\n')
+      .map(l => l.replace(/[^A-Za-z\s]/g, '').trim())
+      .map(l => l.split(/\s+/)[0])
+      .filter(w => w && /^[A-Z][A-Za-z]{2,}$/.test(w) && !SKIP_WORDS.test(w))
+      .slice(0, 2)
+      .join(' ') || null;
+
+    console.log('OCR name:', recruitName);
+    return recruitName;
+  } finally {
+    try { unlinkSync(tmpName); } catch {}
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POSITION + ARCHETYPE EXTRACTION  (x 38–90%, y 18–30%)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function extractPositionArchetype(srcPath, w, h, archetypeList, worker) {
   const left   = Math.round(w * 0.38);
   const top    = Math.round(h * 0.18);
   const width  = Math.round(w * 0.52);
   const height = Math.round(h * 0.12);
-  const tmpPath = join(tmpdir(), `recruit_header_${Date.now()}.png`);
+  const tmpPath = join(tmpdir(), `recruit_meta_${Date.now()}.png`);
 
   try {
     await sharp(srcPath)
@@ -175,19 +218,14 @@ async function extractHeader(srcPath, w, h, archetypeList, worker) {
       .map(l => l.replace(/\|/g, ' ').replace(/\s+/g, ' ').trim())
       .filter(l => l.length > 1);
 
-    console.log('Header OCR lines:', lines);
+    console.log('Meta OCR lines:', lines);
 
     let position  = null;
     let archetype = null;
-    let name      = null;
-
-    const SKIP = /^(POSITION|ARCHETYPE|CLASS|HOMETOWN|ATH|QB|HB|WR|TE|OT|OG|C|DE|DT|LB|CB|S|SS|FS|RT|LT|HIGH|SCHOOL|NAT|STA|POS|TOP)$/;
 
     for (const line of lines) {
-      const tokens = line.split(/\s+/);
-
       if (!position) {
-        for (const tok of tokens) {
+        for (const tok of line.split(/\s+/)) {
           const p = matchPosition(tok);
           if (p) { position = p; break; }
         }
@@ -204,15 +242,43 @@ async function extractHeader(srcPath, w, h, archetypeList, worker) {
         archetype = matchArchetype(line, archetypeList);
       }
 
-      if (!name) {
-        const words = tokens.filter(w =>
-          w.length >= 2 && /^[A-Z][A-Za-z]+$/.test(w) && !SKIP.test(w.toUpperCase())
-        );
-        if (words.length >= 1) name = words.slice(0, 2).join(' ');
+      if (position && archetype) break;
+    }
+
+    // ── Derive position from archetype when OCR position is wrong/missing ──
+    const ARCHETYPE_TO_POS = {
+      'Backfield Creator': ['QB'], 'Dual Threat': ['QB'], 'Pocket Passer': ['QB'], 'Pure Runner': ['QB'],
+      'Elusive Bruiser': ['HB'], 'Backfield Threat': ['HB'], 'NS Receiver': ['HB'],
+      'NS Blocker': ['HB'], 'Contact Seeker': ['HB'], 'East-West Playmaker': ['HB'],
+      'Gadget': ['WR'], 'Physical Route Runner': ['WR','TE'], 'Elusive Route Runner': ['WR'],
+      'Speedster': ['WR'], 'Contested Specialist': ['WR'], 'Gritty Possession': ['WR'], 'Route Artist': ['WR'],
+      'Vertical Threat': ['TE'], 'Pure Blocker': ['TE'], 'Possession': ['TE'],
+      'Raw Strength': ['OT','OG','C'], 'Well Rounded': ['OT','OG','C'],
+      'Pass Protector': ['OT','OG','C'], 'Agile': ['OT','OG','C'],
+      'Speed Rusher': ['DE','DT'], 'Edge Setter': ['DE'], 'Power Rusher': ['DE','DT'],
+      'Pure Power': ['DT'], 'Gap Specialist': ['DT'],
+      'Lurker': ['LB'], 'Signal Caller': ['LB'], 'Thumper': ['LB'],
+      'Field': ['CB'], 'Zone': ['CB'], 'Bump': ['CB'], 'Boundary': ['CB'],
+      'Coverage Specialist': ['S'], 'Hybrid': ['S'], 'Box': ['S'],
+    };
+
+    if (archetype) {
+      const candidates = ARCHETYPE_TO_POS[archetype];
+      if (candidates) {
+        if (candidates.length === 1) {
+          if (position !== candidates[0]) {
+            console.log(`Position corrected by archetype: ${position} → ${candidates[0]} (archetype: ${archetype})`);
+          }
+          position = candidates[0];
+        } else if (!candidates.includes(position)) {
+          console.log(`Position ambiguous for archetype "${archetype}", candidates: ${candidates}, OCR was: ${position} — using ${candidates[0]}`);
+          position = candidates[0];
+        }
       }
     }
 
-    return { position, archetype, name };
+    console.log('OCR position:', position, '| archetype:', archetype);
+    return { position, archetype };
   } finally {
     try { unlinkSync(tmpPath); } catch {}
   }
@@ -223,7 +289,7 @@ async function extractHeader(srcPath, w, h, archetypeList, worker) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function performOCR(imageUrl) {
-  const tmpRaw = join(tmpdir(), `recruit_raw_${Date.now()}.png`);
+  const tmpRaw    = join(tmpdir(), `recruit_raw_${Date.now()}.png`);
   const cellPaths = new Array(10).fill(null);
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
@@ -235,8 +301,8 @@ export async function performOCR(imageUrl) {
   const cropJobs = [];
   for (let row = 0; row < 5; row++) {
     const yC = GRID_ROW_Y[row];
-    cropJobs.push({ idx: row*2,   x1: GRID_L_X1, x2: GRID_L_X2, yC, suffix: `r${row+1}L` });
-    cropJobs.push({ idx: row*2+1, x1: GRID_R_X1, x2: GRID_R_X2, yC, suffix: `r${row+1}R` });
+    cropJobs.push({ idx: row*2,     x1: GRID_L_X1, x2: GRID_L_X2, yC, suffix: `r${row+1}L` });
+    cropJobs.push({ idx: row*2 + 1, x1: GRID_R_X1, x2: GRID_R_X2, yC, suffix: `r${row+1}R` });
   }
 
   await Promise.allSettled(
@@ -265,7 +331,7 @@ export async function performOCR(imageUrl) {
   let values, name = null, position = null, archetype = null;
 
   try {
-    // OCR cells sequentially to avoid shared worker state conflicts
+    // 1. OCR cells sequentially to avoid shared worker state conflicts
     values = [];
     for (const p of cellPaths) {
       try {
@@ -276,10 +342,13 @@ export async function performOCR(imageUrl) {
     }
     console.log('Grid values [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]:', values);
 
-    ({ position, archetype, name } = await extractHeader(
+    // 2. Name extraction
+    name = await extractName(tmpRaw, w, h, worker);
+
+    // 3. Position + archetype with correction
+    ({ position, archetype } = await extractPositionArchetype(
       tmpRaw, w, h, archetypeList, worker
     ));
-    console.log('Header → position:', position, '| archetype:', archetype, '| name:', name);
 
   } finally {
     await worker.terminate();
