@@ -286,22 +286,30 @@ export const SHORTLIST_STARTER_TYPES = [
 // Priority colour based on which items are active for a guild row
 // 🔴 if Advance is on, 🟡 if any other item on, 🟢 if all clear
 export function shortlistRowColor(guildItems, allTypes) {
-  // Only visible items (not off) count toward color
   const visible = guildItems.filter(i => i.state !== 'off');
-  if (!visible.length) return '🟢';
-  const advanceOn = visible.some(i => {
+  if (!visible.length) return '';
+
+  const advanceItem = visible.find(i => {
     const def = allTypes.find(t => t.id === i.type_id);
-    return def?.is_advance && i.state === 'active';
+    return def?.is_advance;
   });
-  if (advanceOn) return '🔴';
-  const hasActive = visible.some(i => i.state === 'active');
-  if (hasActive) return '🟡';
-  const allDone   = visible.every(i => i.state === 'done' || i.state === 'paused');
-  const anyDone   = visible.some(i => i.state === 'done');
-  if (allDone && anyDone) return '🟡';  // still in-cycle, not fully clear
+  const advanceActive = advanceItem?.state === 'active';
+
+  // 🟢 — advance is active AND everything else is done/paused (ready to push)
+  if (advanceActive) {
+    const othersReady = visible
+      .filter(i => i !== advanceItem)
+      .every(i => i.state === 'done' || i.state === 'paused' || i.state === 'off');
+    if (othersReady) return '🟢';
+  }
+
+  // 🔵 — items still in progress (active or done but advance not ready yet)
+  const hasActive = visible.some(i => i.state === 'active' || i.state === 'done');
+  if (hasActive) return '🔵';
+
   const anyPaused = visible.some(i => i.state === 'paused');
   if (anyPaused) return '⏸️';
-  return '🟢';
+  return '';  // all clear
 }
 
 // Build the display string for one guild row
@@ -321,7 +329,8 @@ export function shortlistRowText(rank, guildName, guildItems, allTypes, advanceT
     .map(t => `⏸️${t.icon}`).join(' ');
 
   const parts = [activeIcons, doneIcons, pausedIcons].filter(Boolean).join('  ');
-  const status = parts || '✅ All clear';
+  const status = parts || '';
   const timeTag = advanceTime ? `  ·  ${advanceTime}` : '';
-  return `${rank}. ${color} **${guildName}**　${status}${timeTag}`;
+  const colorTag = color ? `${color} ` : '';
+  return `${rank}. ${colorTag}**${guildName}**　${status}${timeTag}`.trimEnd();
 }

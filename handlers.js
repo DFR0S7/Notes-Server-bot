@@ -929,6 +929,34 @@ async function advanceMissingFill(interaction, recruitId, attr, value) {
 export async function handleModal(interaction) {
   const id = interaction.customId;
 
+  // sl_rename_modal_{encodedLeague} — save new league name
+  if (id.startsWith('sl_rename_modal_')) {
+    await interaction.deferUpdate();
+    const encodedName = id.replace('sl_rename_modal_', '');
+    const userId      = interaction.user.id;
+    const channel     = interaction.channel;
+    const newName     = interaction.fields.getTextInputValue('new_league_name_input').trim();
+    if (!newName) return;
+
+    const types = await getOrSeedShortlistTypes(userId);
+    const { rows } = await getShortlistData(userId, types);
+    const oldName = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
+
+    if (rows.find(r => r.league_name.toLowerCase() === newName.toLowerCase() && r.league_name !== oldName)) {
+      return; // name already taken — silently ignore
+    }
+
+    await supabase.from('shortlist')
+      .update({ league_name: newName })
+      .eq('user_id', userId)
+      .eq('league_name', oldName);
+
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    await postShortlist(channel, types, freshRows, { step: 'main' }, userId);
+    return;
+  }
+
   // sl_add_league_modal — add a new league to the shortlist
   if (id === 'sl_add_league_modal') {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1261,7 +1289,7 @@ function buildShortlistContent(types, rows, activeState) {
   });
   leagueData.sort((a, b) => a.order - b.order);
 
-  const editSteps = ['edit_toggles', 'item_state_pick', 'advance_confirm'];
+  const editSteps = ['edit_toggles', 'item_state_pick'];
   const isEditing = activeState && editSteps.includes(activeState.step);
 
   const lines = leagueData.map((g, i) => {
@@ -1287,6 +1315,8 @@ function buildShortlistComponents(types, rows, state) {
     const options = [
       new StringSelectMenuOptionBuilder().setLabel('Update league').setValue('edit').setEmoji('✏️'),
       new StringSelectMenuOptionBuilder().setLabel('Add league').setValue('add_league').setEmoji('➕'),
+      new StringSelectMenuOptionBuilder().setLabel('Rename league').setValue('rename_league').setEmoji('🏷️'),
+      new StringSelectMenuOptionBuilder().setLabel('Remove league').setValue('remove_league').setEmoji('🗑️'),
     ];
     if (leagues.length > 1) {
       options.splice(1, 0,
@@ -1310,7 +1340,33 @@ function buildShortlistComponents(types, rows, state) {
         ))
     ));
     out.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Primary)
+    ));
+
+  } else if (state.step === 'rename_pick') {
+    out.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('sl_rename_pick')
+        .setPlaceholder('Pick a league to rename…')
+        .addOptions(leagues.map(name =>
+          new StringSelectMenuOptionBuilder().setLabel(name).setValue(name)
+        ))
+    ));
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Primary)
+    ));
+
+  } else if (state.step === 'remove_pick') {
+    out.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('sl_remove_pick')
+        .setPlaceholder('Pick a league to remove…')
+        .addOptions(leagues.map(name =>
+          new StringSelectMenuOptionBuilder().setLabel(name).setValue(name)
+        ))
+    ));
+    out.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Primary)
     ));
 
   } else if (state.step === 'edit_toggles') {
@@ -1339,8 +1395,8 @@ function buildShortlistComponents(types, rows, state) {
     const advTimeLbl  = advTimeVal ? `🕐 ${advTimeVal}` : '🕐 Set advance time';
 
     const actionButtons = [
-      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`sl_remove_league_${enc}`).setLabel('Remove league').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Primary),
+
     ];
     if (advanceActive) {
       actionButtons.unshift(
@@ -1377,18 +1433,7 @@ function buildShortlistComponents(types, rows, state) {
       new ButtonBuilder().setCustomId(`sl_cancel_pick_${enc}`).setLabel('← Cancel').setStyle(ButtonStyle.Secondary),
     ));
 
-  } else if (state.step === 'advance_confirm') {
-    const enc = encodeLeague(state.leagueName);
-    out.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`sl_advance_confirm_${enc}`)
-        .setLabel('✅ Confirm reset')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`sl_advance_cancel_${enc}`)
-        .setLabel('❌ Cancel')
-        .setStyle(ButtonStyle.Secondary),
-    ));
+
 
   } else if (state.step === 'reorder_a') {
     out.push(new ActionRowBuilder().addComponents(
@@ -1402,7 +1447,7 @@ function buildShortlistComponents(types, rows, state) {
         ))
     ));
     out.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Primary)
     ));
 
   } else if (state.step === 'reorder_b') {
@@ -1424,7 +1469,7 @@ function buildShortlistComponents(types, rows, state) {
         )
     ));
     out.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('sl_back').setLabel('← Back').setStyle(ButtonStyle.Primary)
     ));
   }
 
@@ -1449,7 +1494,7 @@ export async function handleSelect(interaction) {
   if (!id.startsWith('sl_')) return;
 
   // Don't defer for add_league — showModal() requires a raw (non-deferred) interaction
-  const isModalAction = id === 'sl_action' && interaction.values[0] === 'add_league';
+  const isModalAction = (id === 'sl_action' && ['add_league'].includes(interaction.values[0])) || id === 'sl_rename_pick';
   if (!isModalAction) await interaction.deferUpdate();
 
   const types   = await getOrSeedShortlistTypes(userId);
@@ -1485,6 +1530,53 @@ export async function handleSelect(interaction) {
       );
       return interaction.showModal(modal);
     }
+
+    if (value === 'rename_league') {
+      // Pick which league to rename
+      activeEdits.set(userId, { type: 'shortlist', step: 'rename_pick' });
+      const { content: c } = buildShortlistContent(types, rows);
+      await postShortlist(channel, types, rows, { step: 'rename_pick' }, userId);
+      return;
+    }
+
+    if (value === 'remove_league') {
+      // Pick which league to remove
+      activeEdits.set(userId, { type: 'shortlist', step: 'remove_pick' });
+      const { content: c } = buildShortlistContent(types, rows);
+      await postShortlist(channel, types, rows, { step: 'remove_pick' }, userId);
+      return;
+    }
+  }
+
+  // sl_rename_pick — picked which league to rename, open modal
+  if (id === 'sl_rename_pick') {
+    const leagueName = value;
+    const enc = encodeLeague(leagueName);
+    const modal = new ModalBuilder()
+      .setCustomId(`sl_rename_modal_${enc}`)
+      .setTitle('Rename League');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('new_league_name_input')
+          .setLabel('New league name')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50)
+          .setValue(leagueName)
+      )
+    );
+    return interaction.showModal(modal);
+  }
+
+  // sl_remove_pick — picked which league to remove, execute immediately
+  if (id === 'sl_remove_pick') {
+    const leagueName = value;
+    await supabase.from('shortlist').delete().eq('user_id', userId).eq('league_name', leagueName);
+    const { rows: freshRows } = await getShortlistData(userId, types);
+    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
+    await postShortlist(channel, types, freshRows, { step: 'main' }, userId);
+    return;
   }
 
   // sl_edit_league — picked which league to edit
@@ -1642,61 +1734,26 @@ export async function handleShortlistButton(interaction, id) {
     await postShortlist(channel, types, rows, { step: 'edit_toggles', leagueName }, userId);
   }
 
-  // sl_advance_complete_{guildId} — show confirmation step
+  // sl_advance_complete — execute reset immediately, no confirmation
   if (id.startsWith('sl_advance_complete_')) {
     const encodedName = id.replace('sl_advance_complete_', '');
     const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
-    activeEdits.set(userId, { type: 'shortlist', step: 'advance_confirm', leagueName });
-    const { content: c } = buildShortlistContent(types, rows);
-    await postShortlist(channel, types, rows, { step: 'advance_confirm', leagueName }, userId);
-  }
 
-  // sl_advance_confirm_{guildId} — execute the reset
-  if (id.startsWith('sl_advance_confirm_')) {
-    const encodedName = id.replace('sl_advance_confirm_', '');
-    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
-    await supabase
-      .from('shortlist')
+    await supabase.from('shortlist')
       .update({ state: 'active' })
-      .eq('user_id', userId)
-      .eq('league_name', leagueName)
-      .eq('state', 'done');
+      .eq('user_id', userId).eq('league_name', leagueName).eq('state', 'done');
 
-    // Clear advance_time — new cycle starts fresh
     const advType = types.find(t => t.is_advance);
     if (advType) {
       await supabase.from('shortlist')
         .update({ advance_time: null })
-        .eq('user_id', userId)
-        .eq('league_name', leagueName)
-        .eq('type_id', advType.id);
+        .eq('user_id', userId).eq('league_name', leagueName).eq('type_id', advType.id);
     }
 
     const { rows: freshRows } = await getShortlistData(userId, types);
     activeEdits.set(userId, { type: 'shortlist', step: 'main' });
-    const { content: c } = buildShortlistContent(types, freshRows);
     await postShortlist(channel, types, freshRows, { step: 'main' }, userId);
     return;
   }
 
-  // sl_advance_cancel_{guildId} — back to edit_toggles
-  if (id.startsWith('sl_advance_cancel_')) {
-    const encodedName = id.replace('sl_advance_cancel_', '');
-    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
-    activeEdits.set(userId, { type: 'shortlist', step: 'edit_toggles', leagueName });
-    const { content: c } = buildShortlistContent(types, rows);
-    await postShortlist(channel, types, rows, { step: 'edit_toggles', leagueName }, userId);
   }
-
-  // sl_remove_league_{encodedLeague}
-  if (id.startsWith('sl_remove_league_')) {
-    const encodedName = id.replace('sl_remove_league_', '');
-    const leagueName  = rows.find(r => encodeLeague(r.league_name) === encodedName)?.league_name ?? encodedName;
-    await supabase.from('shortlist').delete().eq('user_id', userId).eq('league_name', leagueName);
-
-    const { rows: freshRows } = await getShortlistData(userId, types);
-    activeEdits.set(userId, { type: 'shortlist', step: 'main' });
-    const { content: c } = buildShortlistContent(types, freshRows);
-    await postShortlist(channel, types, freshRows, { step: 'main' }, userId);
-  }
-}
