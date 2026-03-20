@@ -1211,22 +1211,26 @@ export async function handleMessage(message) {
     const errors  = [];
 
     for (const line of lines) {
-      const parts = line.split(/\s+/);
-      if (parts.length < 3) { errors.push('Could not parse: ' + line); continue; }
+      // Extract all numbers from the line (handles "Speed 85-95", "Speed 85 95", "Speed: 85-95" etc.)
+      const nums = [...line.matchAll(/\d+/g)].map(m => parseInt(m[0]));
+      if (nums.length < 2) { errors.push('Could not find two numbers in: ' + line); continue; }
 
-      const min  = parseInt(parts[parts.length - 2]);
-      const max  = parseInt(parts[parts.length - 1]);
-      const attr = parts.slice(0, parts.length - 2).join(' ');
+      // Use the last two numbers found as min/max, auto-swap if reversed
+      let min = nums[nums.length - 2];
+      let max = nums[nums.length - 1];
+      if (min > max) [min, max] = [max, min];
+      if (min === max) max = min + 1;  // identical values — nudge max up
 
-      if (isNaN(min) || isNaN(max) || min >= max) {
-        errors.push('Invalid range for: ' + line);
-        continue;
-      }
+      // Attribute name is everything before the first number
+      const firstNumIdx = line.search(/\d/);
+      const attr = line.slice(0, firstNumIdx).replace(/[:\-,]+$/, '').trim();
+      if (!attr) { errors.push('No attribute name found in: ' + line); continue; }
+
       updates[attr] = { min, max };
     }
 
     if (Object.keys(updates).length === 0) {
-      return message.reply('No valid ranges found. Format: AttributeName min max (e.g. Speed 85 95)');
+      return message.reply('No valid ranges found. Try: Speed 85 95 (or Speed 85-95, Speed: 85 95)');
     }
 
     const { data: arch } = await supabase
