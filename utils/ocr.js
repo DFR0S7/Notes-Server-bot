@@ -157,6 +157,7 @@ async function ocrCell(worker, cellData) {
 
     const result = await worker.recognize(tmpThresh);
     const raw = result.data.text.replace(/\s+/g, '').replace(/[^0-9]/g, '');
+    console.log(`  ocrCell [${tmpPath.split('_').slice(-2,-1)[0]}] thresh=${thresh} raw='${result.data.text.trim()}' digits='${raw}'`);
 
     for (const m of (raw.match(/\d{2,3}/g) || [])) {
       const n = parseInt(m);
