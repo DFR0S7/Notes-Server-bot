@@ -19,7 +19,7 @@ const GRID_R_X2    = 0.660;   // right column end
 // Number row y-centres — TALL glyph cluster centres, not label rows.
 // Gap between rows is uniform ~140px at 2160p. Verified 10/10 on 8186.jpg.
 const GRID_ROW_Y    = [0.4958, 0.5611, 0.6259, 0.6907, 0.7556];
-const GRID_ROW_HALF = 0.020;   // ±2.0% → ~43 px at 2160 p
+const GRID_ROW_HALF = 0.018;   // ±1.8% → ~39 px at 2160 p
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POSITION / ARCHETYPE CONSTANTS
@@ -151,9 +151,6 @@ async function ocrCell(worker, imgPath) {
       if (firstLast >= 50 && firstLast <= 99) return firstLast;
     }
   }
-  // Log null results so we can see what Tesseract actually returned
-  const suffix = imgPath.match(/recruit_cell_([^_]+)/)?.[1] ?? '?';
-  console.log(`  null cell [${suffix}]: raw text='${result.data.text.trim()}' digits='${raw}'`);
   return null;
 }
 
