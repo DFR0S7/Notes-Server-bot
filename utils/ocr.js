@@ -128,28 +128,24 @@ function matchArchetype(raw, list) {
 // GRID NUMBER EXTRACTION
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
+// cropNumberCell returns crop parameters only — no file I/O
+function cropNumberCell(srcPath, x1, x2, yC, halfH, w, h, suffix) {
   const left   = Math.round(w * x1);
   const top    = Math.max(0, Math.round(h * (yC - halfH)));
   const width  = Math.round(w * (x2 - x1));
   const height = Math.min(h - top, Math.round(h * halfH * 2));
-
-  // Save a normalised (autocontrast) version — threshold applied per-pass in ocrCell
-  const tmpPath = join(tmpdir(), `recruit_cell_${suffix}_${Date.now()}.png`);
-  await sharp(srcPath)
-    .extract({ left, top, width, height })
-    .greyscale()
-    .toFile(tmpPath);  // raw greyscale — threshold applied per-pass in ocrCell
-
-  return { tmpPath, width, height };
+  return { srcPath, left, top, width, height, suffix };
 }
 
 async function ocrCell(worker, cellData) {
-  const { tmpPath, width } = cellData;
+  const { srcPath, left, top, width, height, suffix } = cellData;
 
+  // Single sharp chain per threshold — no intermediate greyscale file
   for (const thresh of [101, 131, 161]) {
-    const tmpThresh = tmpPath.replace('.png', `_t${thresh}.png`);
-    await sharp(tmpPath)
+    const tmpThresh = join(tmpdir(), `recruit_cell_${suffix}_t${thresh}_${Date.now()}.png`);
+    await sharp(srcPath)
+      .extract({ left, top, width, height })
+      .greyscale()
       .threshold(thresh)
       .negate()
       .resize({ width: width * 8, kernel: 'nearest' })
@@ -157,26 +153,22 @@ async function ocrCell(worker, cellData) {
 
     const result = await worker.recognize(tmpThresh);
     const raw = result.data.text.replace(/\s+/g, '').replace(/[^0-9]/g, '');
+    try { unlinkSync(tmpThresh); } catch {}
 
     for (const m of (raw.match(/\d{2,3}/g) || [])) {
       const n = parseInt(m);
-      if (n >= 50 && n <= 99) {
-        try { unlinkSync(tmpThresh); } catch {}
-        return n;
-      }
+      if (n >= 50 && n <= 99) return n;
       if (m.length === 3) {
         const lastTwo   = parseInt(m[1] + m[2]);
         const firstLast = parseInt(m[0] + m[2]);
-        if (lastTwo   >= 50 && lastTwo   <= 99) { try { unlinkSync(tmpThresh); } catch {} return lastTwo; }
-        if (firstLast >= 50 && firstLast <= 99) { try { unlinkSync(tmpThresh); } catch {} return firstLast; }
+        if (lastTwo   >= 50 && lastTwo   <= 99) return lastTwo;
+        if (firstLast >= 50 && firstLast <= 99) return firstLast;
       }
     }
-    try { unlinkSync(tmpThresh); } catch {}
   }
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // NAME EXTRACTION  (original working logic — untouched)
 // Crop: x 45–72%, y 12–25%
 // ─────────────────────────────────────────────────────────────────────────────
@@ -430,15 +422,10 @@ export async function performOCR(imageUrl) {
     cropJobs.push({ idx: row*2 + 1, x1: GRID_R_X1, x2: GRID_R_X2, yC, suffix: `r${row+1}R` });
   }
 
-  await Promise.allSettled(
-    cropJobs.map(async ({ idx, x1, x2, yC, suffix }) => {
-      try {
-        cellPaths[idx] = await cropNumberCell(tmpRaw, x1, x2, yC, GRID_ROW_HALF, w, h, suffix);
-      } catch (e) {
-        console.error(`Cell crop ${suffix} failed:`, e.message);
-      }
-    })
-  );
+  // cropNumberCell is now sync — just store parameters, no file I/O at this stage
+  for (const { idx, x1, x2, yC, suffix } of cropJobs) {
+    cellPaths[idx] = cropNumberCell(tmpRaw, x1, x2, yC, GRID_ROW_HALF, w, h, suffix);
+  }
 
   // Fetch archetype list from DB; merge with fallback
   const { data: dbArchetypes } = await supabase.from('archetypes').select('archetype');
@@ -481,7 +468,7 @@ export async function performOCR(imageUrl) {
   } finally {
     await worker.terminate();
     try { unlinkSync(tmpRaw); } catch {}
-    for (const c of cellPaths) if (c) try { unlinkSync(c.tmpPath); } catch {}
+    // No intermediate cell files to clean up — ocrCell handles its own tmpThresh cleanup
   }
 
   return { values, name, position, archetype };
