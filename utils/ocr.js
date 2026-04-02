@@ -7,6 +7,48 @@ import sharp from 'sharp';
 import { supabase } from '../supabase.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SINGLETON TESSERACT WORKER
+// Reused across scans to avoid reloading the ~50MB English language model.
+// A simple busy flag serializes concurrent scans.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _worker     = null;
+let _workerBusy = false;
+const _workerQueue = [];
+
+async function getSharedWorker() {
+  if (!_worker) {
+    _worker = await createWorker('eng', 1, {
+      logger: () => {},
+      errorHandler: () => {},
+    });
+  }
+  return _worker;
+}
+
+async function acquireWorker() {
+  if (!_workerBusy) {
+    _workerBusy = true;
+    return getSharedWorker();
+  }
+  // Queue and wait if another scan is in progress
+  return new Promise((resolve) => {
+    _workerQueue.push(resolve);
+  }).then(() => getSharedWorker());
+}
+
+function releaseWorker() {
+  if (_workerQueue.length > 0) {
+    const next = _workerQueue.shift();
+    next();
+  } else {
+    _workerBusy = false;
+  }
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GRID CONSTANTS  (calibrated against 3840×2160 screenshots, multiple teams)
 // X bounds target ONLY the number glyphs, not the attribute label text.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -295,7 +337,11 @@ export async function performOCR(imageUrl) {
   const cellPaths = new Array(10).fill(null);
 
   const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
-  writeFileSync(tmpRaw, Buffer.from(response.data));
+  // Downsize to 50% before processing — 1920×1080 is sufficient for our cell crops
+  // and halves memory/IO for every subsequent sharp operation
+  await sharp(Buffer.from(response.data))
+    .resize({ width: 1920, kernel: 'lanczos3' })
+    .toFile(tmpRaw);
 
   const { width: w, height: h } = await sharp(tmpRaw).metadata();
   console.log(`Image: ${w}×${h}`);
@@ -321,25 +367,21 @@ export async function performOCR(imageUrl) {
   const dbList = dbArchetypes?.map(a => a.archetype) || [];
   const archetypeList = [...new Set([...dbList, ...FALLBACK_ARCHETYPES])];
 
-  const worker = await createWorker('eng', 1, {
-    logger: () => {},
-    errorHandler: () => {},
-  });
-  await worker.setParameters({
-    tessedit_pageseg_mode: '8',
-    tessedit_char_whitelist: '0123456789',
-  });
+  // Acquire the shared worker (serializes concurrent scans)
+  const worker = await acquireWorker();
 
   let values, name = null, position = null, archetype = null;
 
   try {
-    // 1. OCR cells sequentially to avoid shared worker state conflicts
+    // 1. OCR cells sequentially — delete each temp file immediately after use
     values = [];
     for (const p of cellPaths) {
       try {
         values.push(p ? await ocrCell(worker, p) : null);
       } catch {
         values.push(null);
+      } finally {
+        if (p) try { unlinkSync(p); } catch {}
       }
     }
     console.log('Grid values [L1,R1,L2,R2,L3,R3,L4,R4,L5,R5]:', values);
@@ -353,9 +395,11 @@ export async function performOCR(imageUrl) {
     ));
 
   } finally {
-    await worker.terminate();
+    releaseWorker();
     try { unlinkSync(tmpRaw); } catch {}
-    for (const p of cellPaths) if (p) try { unlinkSync(p); } catch {}
+    // Cell files already deleted inline above
+    // Clear sharp's libvips cache to release decoded image buffers
+    sharp.cache({ memory: 50, files: 0, items: 0 });
   }
 
   return { values, name, position, archetype };
