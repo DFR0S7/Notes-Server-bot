@@ -98,7 +98,7 @@ async function start() {
   try {
     console.log('Registering slash commands...');
     const rest = new REST({ version: '10' }).setToken(config.token);
-    await rest.put(Routes.applicationCommands(config.clientId), { body: commands });
+    await rest.put(Routes.applicationGuildCommands(config.clientId,process.env.GUILD_ID), { body: commands });
     console.log('Commands registered!');
   } catch (err) {
     console.error('Failed to register commands:', err.message);
@@ -123,7 +123,7 @@ process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', 
 client.on('error', (err) => console.error('Discord client error:', err.message));
 client.on('shardError', (err) => console.error('Shard error:', err.message));
 
-client.once('clientReady', () => console.log('Notes Server Bot online: ' + client.user.tag));
+client.once('ready', () => console.log('Notes Server Bot online: ' + client.user.tag));
 
 client.on('interactionCreate', async (interaction) => {
   try {
