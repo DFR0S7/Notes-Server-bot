@@ -106,7 +106,7 @@ async function start() {
   client.login(config.token);
 }
 
-const SELF_PING_URL = process.env.SELF_PING_URL || null;
+const SELF_PING_URL = process.env.SELF_PING_URL ?? null;
 
 if (SELF_PING_URL) {
   console.log('Self-pinger active:', SELF_PING_URL);
