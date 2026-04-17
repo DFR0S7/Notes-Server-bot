@@ -82,7 +82,9 @@ async function ocrCell(worker, path) {
    MAIN OCR
 ───────────────────────────────────────────── */
 export async function performOCR(imageUrl) {
-  log('Starting OCR:', imageUrl);
+   console.error('[OCR] performOCR() CALLED');
+   console.error('[OCR] Image URL:', imageUrl); 
+   log('Starting OCR:', imageUrl);
 
   const tmpRaw = join(tmpdir(), `raw_${Date.now()}.png`);
   const resp = await axios.get(imageUrl, { responseType: 'arraybuffer' });
@@ -115,6 +117,22 @@ export async function performOCR(imageUrl) {
     for (const p of cellPaths) try { unlinkSync(p); } catch {}
     try { unlinkSync(tmpRaw); } catch {}
   }
+   // 2. Name extraction
+name = await extractName(tmpRaw, w, h, worker);
+
+// 3. Position + archetype
+({ position, archetype } = await extractPositionArchetype(
+  console.error('[OCR] extractPositionArchetype CALLED');
+console.error('[OCR] Meta region box:', { left, top, width, height });
+   tmpRaw,
+  w,
+  h,
+  archetypeList,
+  worker
+   console.error('[OCR] Meta OCR raw text:', result.data.text);
+
+));
+   return { values, name, position, archetype };
 }
 export function mapGridValues(values, attrOrder) {
   if (!Array.isArray(values) || !Array.isArray(attrOrder) || attrOrder.length !== 10) {
