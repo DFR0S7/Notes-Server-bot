@@ -116,3 +116,26 @@ export async function performOCR(imageUrl) {
     try { unlinkSync(tmpRaw); } catch {}
   }
 }
+export function mapGridValues(values, attrOrder) {
+  if (!Array.isArray(values) || !Array.isArray(attrOrder) || attrOrder.length !== 10) {
+    console.warn('[OCR] Invalid input to mapGridValues');
+    return { attrs: {}, missing: attrOrder ?? [] };
+  }
+
+  const attrs = {};
+  const missing = [];
+
+  for (let i = 0; i < 10; i++) {
+    const key = attrOrder[i];
+    const val = values[i];
+
+    if (typeof val === 'number' && val >= 50 && val <= 99) {
+      attrs[key] = val;
+    } else {
+      missing.push(key);
+    }
+  }
+
+  console.log('[OCR] mapGridValues → attrs:', attrs, 'missing:', missing);
+  return { attrs, missing };
+}
